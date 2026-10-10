@@ -277,6 +277,7 @@ mod tests {
             bridge: None,
             relay_ca: None,
             vpn: Some(vpn.clone()),
+            extra: vec![],
         })
         .await
         .unwrap();

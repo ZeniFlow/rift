@@ -12,3 +12,6 @@ librift = { path = "../librift" }
 clap = { version = "4", features = ["derive", "env"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rift-reality = { version = "0.0.1", path = "../rift-reality" }
+rift-trust = { version = "0.0.1", path = "../rift-trust" }
+serde = "1.0.229"
+serde_json = "1.0.152"

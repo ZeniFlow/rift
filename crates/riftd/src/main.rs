@@ -3,7 +3,10 @@ use std::{net::SocketAddr, path::PathBuf, time::Duration};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use librift::bridge::BridgeUrl;
-use librift::{Config, EndpointAddr, Node, NodeId, RelayUrl, SecretKey, TransportAddr, Url, load_or_create_key, vpn};
+use librift::host::{HTTP_ALPN, Host};
+use librift::names::{self, NAMES_ALPN, Request, Resolver};
+use librift::{Config, EndpointAddr, Handler, Node, NodeId, RelayUrl, SecretKey, TransportAddr, Url, load_or_create_key, vpn};
+use rift_trust::{Announcement, Bundle, PublicKey};
 
 #[derive(Parser)]
 #[command(name = "riftd", version, about = "Нода сети Rift")]
@@ -65,6 +68,43 @@ enum Cmd {
         #[arg(long)]
         public: String,
     },
+    /// Резолвер имён: недоверенный кэш цепочек (доверие — в подписях, нужен только root).
+    Resolver {
+        /// Публичный ключ root (вшит в приложение; здесь — для разработки).
+        #[arg(long, env = "RIFT_ROOT")]
+        root: PublicKey,
+    },
+    /// Опубликовать сайт: цепочка домена + туннель до локального приложения.
+    Host {
+        #[arg(long, env = "RIFT_ROOT")]
+        root: PublicKey,
+        /// bundle.json от `rift-ca bundle`.
+        #[arg(long)]
+        bundle: PathBuf,
+        /// Локальное приложение (Node.js, nginx…), host:port.
+        #[arg(long)]
+        upstream: String,
+        #[arg(long = "resolver", env = "RIFT_RESOLVERS", value_delimiter = ',', required = true)]
+        resolvers: Vec<String>,
+    },
+    /// Отправить цепочки / объявления резолверам.
+    Publish {
+        #[arg(long = "resolver", env = "RIFT_RESOLVERS", value_delimiter = ',', required = true)]
+        resolvers: Vec<String>,
+        #[arg(long)]
+        bundle: Vec<PathBuf>,
+        /// Объявление (freeze / отзыв) от `rift-ca notice`.
+        #[arg(long)]
+        notice: Vec<PathBuf>,
+    },
+    /// Открыть rift://имя.зона/путь и вывести ответ (как curl).
+    Get {
+        url: String,
+        #[arg(long, env = "RIFT_ROOT")]
+        root: PublicKey,
+        #[arg(long = "resolver", env = "RIFT_RESOLVERS", value_delimiter = ',', required = true)]
+        resolvers: Vec<String>,
+    },
 }
 
 #[tokio::main]
@@ -95,6 +135,11 @@ async fn main() -> Result<()> {
 
     let default_relay = cli.relays.first().cloned();
     let relay_mode = Config::relay_mode(cli.relays);
+    let extra: Vec<(Vec<u8>, Handler)> = match &cli.cmd {
+        Cmd::Resolver { root } => vec![(NAMES_ALPN.to_vec(), Box::new(Resolver::new(*root)))],
+        Cmd::Host { upstream, .. } => vec![(HTTP_ALPN.to_vec(), Box::new(Host::new(upstream.as_str())))],
+        _ => vec![],
+    };
 
     if let Cmd::Vpn { peers } = cli.cmd {
         let peers = peers
@@ -105,7 +150,7 @@ async fn main() -> Result<()> {
         let (ifname, from_tun, to_tun) =
             vpn::open_tun(me).context("не удалось создать TUN (нужен sudo / администратор)")?;
         let vpn = vpn::Vpn::new(key.public(), peers.clone(), to_tun);
-        let node = Node::bind(Config { key, relay_mode, lan: true, proxy: cli.proxy, bridge: cli.bridge, relay_ca: cli.relay_ca, vpn: Some(vpn.clone()) }).await?;
+        let node = Node::bind(Config { key, relay_mode, lan: true, proxy: cli.proxy, bridge: cli.bridge, relay_ca: cli.relay_ca, vpn: Some(vpn.clone()), extra: vec![] }).await?;
         tokio::spawn(vpn.run(node.endpoint().clone(), from_tun));
         println!("NodeID: {}\nVPN:    {me} на {ifname}\n\nPeers:", node.id());
         for p in &peers {
@@ -116,9 +161,69 @@ async fn main() -> Result<()> {
         return node.shutdown().await;
     }
 
-    let node = Node::bind(Config { key, relay_mode, lan: true, proxy: cli.proxy, bridge: cli.bridge, relay_ca: cli.relay_ca, vpn: None }).await?;
+    let node = Node::bind(Config { key, relay_mode, lan: true, proxy: cli.proxy, bridge: cli.bridge, relay_ca: cli.relay_ca, vpn: None, extra }).await?;
     match cli.cmd {
         Cmd::Id | Cmd::Vpn { .. } | Cmd::Bridge { .. } => unreachable!(),
+        Cmd::Resolver { .. } => {
+            node.endpoint().online().await;
+            let relay = node.endpoint().addr().relay_urls().next().map(|r| format!("@{r}")).unwrap_or_default();
+            println!("Резолвер: {}{relay}\n\nCtrl-C — выход.", node.id());
+            tokio::signal::ctrl_c().await?;
+        }
+        Cmd::Host { root, bundle, resolvers, upstream } => {
+            let bundle: Bundle = read_json(&bundle)?;
+            let name = rift_trust::verify(&root, &bundle, &[], names::now())
+                .context("цепочка не проходит проверку")
+                .and_then(|r| {
+                    anyhow::ensure!(r.hosts.contains(&node.id()), "в записях {} нет NodeID этой ноды ({}): перевыпусти dns с --host {}", r.name, node.id(), node.id());
+                    Ok(r.name)
+                })?;
+            let resolvers = parse_peers(&resolvers, &default_relay)?;
+            println!("rift://{name} → {upstream} (NodeID {})\nCtrl-C — выход.", node.id());
+            let mut tick = tokio::time::interval(Duration::from_secs(300));
+            loop {
+                tokio::select! {
+                    _ = tick.tick() => {
+                        let n = names::publish(node.endpoint(), &resolvers, Request::PutBundle(bundle.clone())).await;
+                        println!("опубликовано: {n}/{}", resolvers.len());
+                    }
+                    _ = tokio::signal::ctrl_c() => break,
+                }
+            }
+        }
+        Cmd::Publish { resolvers, bundle, notice } => {
+            let resolvers = parse_peers(&resolvers, &default_relay)?;
+            for p in bundle {
+                let n = names::publish(node.endpoint(), &resolvers, Request::PutBundle(read_json::<Bundle>(&p)?)).await;
+                println!("{}: принято {n}/{}", p.display(), resolvers.len());
+            }
+            for p in notice {
+                let n = names::publish(node.endpoint(), &resolvers, Request::PutNotice(read_json::<Announcement>(&p)?)).await;
+                println!("{}: принято {n}/{}", p.display(), resolvers.len());
+            }
+        }
+        Cmd::Get { url, root, resolvers } => {
+            let rest = url.strip_prefix("rift://").context("ожидался rift://имя.зона/путь")?;
+            let (name, path) = rest.split_once('/').map_or((rest, "/".to_string()), |(n, p)| (n, format!("/{p}")));
+            let resolvers = parse_peers(&resolvers, &default_relay)?;
+            let r = names::resolve(node.endpoint(), &resolvers, &root, name).await?;
+            let request = librift::host::get_request(name, &path);
+            let mut last = None;
+            for h in &r.hosts {
+                let addr = EndpointAddr::from_parts(*h, default_relay.clone().map(TransportAddr::Relay));
+                match librift::host::fetch(node.endpoint(), addr, &request).await {
+                    Ok(body) => {
+                        std::io::Write::write_all(&mut std::io::stdout(), &body)?;
+                        last = None;
+                        break;
+                    }
+                    Err(e) => last = Some(e),
+                }
+            }
+            if let Some(e) = last {
+                return Err(e).context("ни один хост не ответил");
+            }
+        }
         Cmd::Listen => {
             node.endpoint().online().await;
             let addr = node.endpoint().addr();
@@ -199,4 +304,13 @@ async fn run_bridge(home: &std::path::Path, listen: SocketAddr, dest: &str, upst
         dest: dest.to_string(),
     };
     librift::bridge::serve(listen, cfg, upstream.to_string()).await
+}
+
+fn parse_peers(list: &[String], default_relay: &Option<RelayUrl>) -> Result<Vec<EndpointAddr>> {
+    list.iter().map(|p| parse_peer(p, default_relay.clone())).collect()
+}
+
+fn read_json<T: serde::de::DeserializeOwned>(path: &std::path::Path) -> Result<T> {
+    rift_trust::from_json(&std::fs::read_to_string(path).with_context(|| format!("не удалось прочитать {}", path.display()))?)
+        .with_context(|| format!("{}: не тот формат", path.display()))
 }

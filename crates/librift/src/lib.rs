@@ -15,6 +15,7 @@ use iroh::{
     protocol::{AcceptError, ProtocolHandler, Router},
 };
 
+pub type Handler = Box<dyn iroh::protocol::DynProtocolHandler>;
 pub use url::Url;
 pub use iroh::{EndpointAddr, EndpointId as NodeId, RelayMode, RelayUrl, SecretKey, TransportAddr};
 
@@ -48,6 +49,8 @@ pub fn load_or_create_key(path: &Path) -> Result<SecretKey> {
 }
 
 pub mod bridge;
+pub mod host;
+pub mod names;
 pub mod vpn;
 
 /// Настройки ноды.
@@ -66,6 +69,8 @@ pub struct Config {
     /// (свои relay без публичных CA и без засветки доменов в CT-логах).
     pub relay_ca: Option<std::path::PathBuf>,
     pub vpn: Option<vpn::Vpn>,
+    /// Дополнительные протоколы (резолвер имён, хост сайта…).
+    pub extra: Vec<(Vec<u8>, Handler)>,
 }
 
 impl Config {
@@ -114,6 +119,9 @@ impl Node {
         let mut router = Router::builder(builder.bind().await?).accept(PING_ALPN, Pong);
         if let Some(vpn) = cfg.vpn {
             router = router.accept(vpn::VPN_ALPN, vpn);
+        }
+        for (alpn, handler) in cfg.extra {
+            router = router.accept(alpn, handler);
         }
         Ok(Self { router: router.spawn() })
     }
@@ -211,7 +219,7 @@ mod tests {
 
     #[tokio::test]
     async fn ping_over_localhost() -> Result<()> {
-        let cfg = || Config { key: SecretKey::generate(), relay_mode: RelayMode::Disabled, lan: false, proxy: None, bridge: None, relay_ca: None, vpn: None };
+        let cfg = || Config { key: SecretKey::generate(), relay_mode: RelayMode::Disabled, lan: false, proxy: None, bridge: None, relay_ca: None, vpn: None, extra: vec![] };
         let a = Node::bind(cfg()).await?;
         let b = Node::bind(cfg()).await?;
         let mut p = a.pinger(b.endpoint().addr()).await?;
@@ -282,6 +290,7 @@ mod tests {
             bridge: None,
             relay_ca: None,
             vpn: None,
+            extra: vec![],
         })
         .await?;
         tokio::time::timeout(Duration::from_secs(10), node.endpoint().online()).await?;

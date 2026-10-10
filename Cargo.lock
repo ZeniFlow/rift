@@ -1953,7 +1953,10 @@ dependencies = [
  "iroh",
  "iroh-mdns-address-lookup",
  "rift-reality",
+ "rift-trust",
  "rustls-pki-types",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
  "tun-rs",
@@ -3079,6 +3082,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rift-trust"
+version = "0.0.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "iroh-base",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "riftd"
 version = "0.0.1"
 dependencies = [
@@ -3086,6 +3100,9 @@ dependencies = [
  "clap",
  "librift",
  "rift-reality",
+ "rift-trust",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing-subscriber",
 ]
@@ -3378,9 +3395,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.151"
+version = "1.0.152"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
+checksum = "1741ab7a6cc54a03a89b5d563ed60075c277d9e3cfa73ad0c1f23f23974703c6"
 dependencies = [
  "itoa",
  "memchr",
