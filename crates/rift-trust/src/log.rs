@@ -58,6 +58,30 @@ pub fn entry_of<T: Kind + Serialize>(s: &Signed<T>) -> String {
     format!("{}\n{}", T::KIND, serde_json::to_string(s).expect("сериализуется"))
 }
 
+/// Запись — это `<вид>\n<JSON подписанного сертификата>`. Проверяем только форму, подписи проверит клиент.
+pub fn check_entry_format(entry: &str) -> Result<(), String> {
+    let (kind, json) = entry.split_once('\n').ok_or("нет вида записи")?;
+    match kind {
+        "zone" => serde_json::from_str::<Signed<crate::ZoneCert>>(json).map(drop),
+        "registrar" => serde_json::from_str::<Signed<crate::RegistrarCert>>(json).map(drop),
+        "domain" => serde_json::from_str::<Signed<crate::DomainRecord>>(json).map(drop),
+        other => return Err(format!("неизвестный вид записи: {other}")),
+    }
+    .map_err(|e| format!("запись не разобрана: {e}"))
+}
+
+/// Из файла сертификата (`rift-ca zone|registrar|domain`) делает запись лога.
+pub fn entry_from_json(kind: &str, json: &str) -> Result<String, String> {
+    let err = |e: serde_json::Error| format!("не разобрал {kind}: {e}");
+    match kind {
+        "zone" => serde_json::from_str::<Signed<crate::ZoneCert>>(json).map(|c| entry_of(&c)),
+        "registrar" => serde_json::from_str::<Signed<crate::RegistrarCert>>(json).map(|c| entry_of(&c)),
+        "domain" => serde_json::from_str::<Signed<crate::DomainRecord>>(json).map(|c| entry_of(&c)),
+        other => return Err(format!("неизвестный вид: {other} (zone, registrar, domain)")),
+    }
+    .map_err(err)
+}
+
 /// Проверка доказательства. Возвращает `head.time`: запись выпущена НЕ ПОЗЖЕ этого момента.
 pub fn check_proof(entry: &str, p: &Proof, log_key: &PublicKey, t: &Trust, what: &'static str) -> Result<Time, Error> {
     let h = &p.head;
@@ -121,6 +145,11 @@ impl Log {
         Some(Proof { index, path: inclusion_path(&leaves, index as usize), head: head.clone(), cosigs })
     }
 
+    /// Корень дерева из первых `size` записей.
+    pub fn root_at(&self, size: u64) -> Option<Hash> {
+        (size as usize <= self.entries.len()).then(|| root_of(&self.hashes(size as usize)))
+    }
+
     pub fn consistency(&self, old: u64, new: u64) -> Option<Vec<Hash>> {
         let (old, new) = (old as usize, new as usize);
         (0 < old && old <= new && new <= self.entries.len()).then(|| consistency_proof(&self.hashes(new), old))
@@ -172,6 +201,12 @@ impl Witness {
             None => self.seen.push(Seen { log: h.log, size: h.size, root: h.root, time: h.time }),
         }
         Ok(Cosig::sign(head, key))
+    }
+
+    /// Если для этой головы нужно доказательство согласованности — размер, от которого его надо строить.
+    pub fn needs_proof(&self, head: &Signed<TreeHead>) -> Option<u64> {
+        let seen = self.seen.iter().find(|s| s.log == head.body.log)?;
+        (0 < seen.size && seen.size < head.body.size).then_some(seen.size)
     }
 
     pub fn size_of(&self, log: &PublicKey) -> u64 {

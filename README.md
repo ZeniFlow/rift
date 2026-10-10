@@ -94,6 +94,28 @@ rift-ca bundle --control control.json --zone zone.json --zone-proof zone-proof.j
 rift-ca verify --root $ROOT --witness $W1 --witness $W2 --threshold 2 --bundle bundle.json
 ```
 
+### Те же шаги по сети (вместо `log-add` / `log-head` / `cosign` / `log-prove` вручную)
+
+Ключи из `rift-ca keygen` годятся как ключ ноды: `--key`. У лога ключ ноды = ключ лога, у свидетеля — ключ свидетеля.
+Добавлять записи может только отдельный ключ из `--appender` (нода не может подключиться сама к себе).
+
+```bash
+APP=$(rift-ca keygen app.key)                                  # ключ, которому разрешено писать в логи
+riftd --key w1.key --home w1 --relay $RELAY witness --log $CTL --log $ZON       # свидетели (--log: какие логи подписывать)
+riftd --key w2.key --home w2 --relay $RELAY witness --log $CTL --log $ZON
+riftd --key control.key --home cl --relay $RELAY log --appender $APP --witness $W1 --witness $W2   # лог control
+riftd --key zone.key    --home zl --relay $RELAY log --appender $APP --witness $W1 --witness $W2   # лог зоны
+
+riftd --key app.key --relay $RELAY log-add   --log $CTL --kind zone --cert zone.json   # печатает индекс
+riftd --key app.key --relay $RELAY log-proof --log $CTL --index 0 -o zone-proof.json   # ждёт подписей свидетелей
+riftd --key app.key --relay $RELAY log-add   --log $ZON --kind domain --cert domain.json
+riftd --key app.key --relay $RELAY log-proof --log $ZON --index 0 -o domain-proof.json
+```
+
+Лог сам подписывает новые головы, носит их свидетелям и сохраняет подписи в `<home>/log.json`; по запросу отдаёт
+доказательство от **самой ранней** головы с кворумом подписей. Свидетель хранит виденное в `<home>/witness.json`
+и без возможности сохранить состояние ничего не подписывает.
+
 Свидетель сам проверяет, что новая голова честно продолжает виденное, и отказывается подписывать
 переписанную историю и «раздвоение» (два разных корня одного размера).
 

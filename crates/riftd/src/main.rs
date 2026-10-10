@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use librift::bridge::BridgeUrl;
 use librift::host::{HTTP_ALPN, Host};
+use librift::logsvc::{self, LOG_ALPN, LogService, WITNESS_ALPN, WitnessService};
 use librift::names::{self, NAMES_ALPN, Request, Resolver};
 use librift::{Config, EndpointAddr, Handler, Node, NodeId, RelayUrl, SecretKey, TransportAddr, Url, load_or_create_key, vpn};
 use rift_trust::{Announcement, Bundle, PublicKey, Trust};
@@ -40,6 +41,9 @@ struct Cli {
     /// Каталог с ключом ноды и данными.
     #[arg(long, env = "RIFT_HOME", global = true)]
     home: Option<PathBuf>,
+    /// Файл ключа вместо `<home>/key` (например, ключ из `rift-ca keygen`: у лога и свидетеля ключ ноды = ключ лога/свидетеля).
+    #[arg(long, env = "RIFT_KEY", global = true)]
+    key: Option<PathBuf>,
     /// URL relay (можно несколько). Пусто → публичные relay n0, только для разработки.
     #[arg(long = "relay", env = "RIFT_RELAY", value_delimiter = ',', global = true)]
     relays: Vec<RelayUrl>,
@@ -99,6 +103,52 @@ enum Cmd {
         #[command(flatten)]
         trust: TrustArgs,
     },
+    /// Сетевой лог: ключ ноды (`--key`) = ключ лога. Сам подписывает головы и собирает подписи свидетелей.
+    Log {
+        /// Кому можно добавлять записи (NodeID; отдельный от ключа лога ключ). Можно несколько.
+        #[arg(long = "appender", value_delimiter = ',', required = true)]
+        appenders: Vec<PublicKey>,
+        /// Свидетели: NodeID или NodeID@relay.
+        #[arg(long = "witness", env = "RIFT_LOG_WITNESSES", value_delimiter = ',', required = true)]
+        witnesses: Vec<String>,
+        /// Сколько подписей нужно голове, чтобы выдавать по ней доказательства (по умолчанию — все свидетели).
+        #[arg(long)]
+        quorum: Option<usize>,
+        /// Файл лога (по умолчанию `<home>/log.json`).
+        #[arg(long)]
+        file: Option<PathBuf>,
+    },
+    /// Свидетель: проверяет головы логов и подписывает. Ключ ноды (`--key`) = ключ свидетеля.
+    Witness {
+        /// Файл состояния — что свидетель видел (по умолчанию `<home>/witness.json`).
+        #[arg(long)]
+        state: Option<PathBuf>,
+        /// Какие логи подписывать (NodeID лога). Без этого — любые, и состояние растёт.
+        #[arg(long = "log")]
+        logs: Vec<PublicKey>,
+    },
+    /// Добавить сертификат в сетевой лог (нужен ключ, разрешённый в `--appender`).
+    LogAdd {
+        #[arg(long)]
+        log: String,
+        /// zone, registrar или domain.
+        #[arg(long)]
+        kind: String,
+        #[arg(long)]
+        cert: PathBuf,
+    },
+    /// Получить доказательство включения (ждёт подписей свидетелей).
+    LogProof {
+        #[arg(long)]
+        log: String,
+        #[arg(long)]
+        index: u64,
+        /// Сколько секунд ждать подписей свидетелей.
+        #[arg(long, default_value_t = 60)]
+        wait: u64,
+        #[arg(short, long)]
+        out: PathBuf,
+    },
     /// Опубликовать сайт: цепочка домена + туннель до локального приложения.
     Host {
         #[command(flatten)]
@@ -151,7 +201,7 @@ async fn main() -> Result<()> {
         Some(h) => h,
         None => std::env::home_dir().context("не найден домашний каталог, укажи --home")?.join(".rift"),
     };
-    let key = load_or_create_key(&home.join("key"))?;
+    let key = load_or_create_key(&cli.key.clone().unwrap_or_else(|| home.join("key")))?;
 
     if let Cmd::Bridge { listen, dest, upstream, public } = &cli.cmd {
         return run_bridge(&home, *listen, dest, upstream, public).await;
@@ -166,7 +216,21 @@ async fn main() -> Result<()> {
 
     let default_relay = cli.relays.first().cloned();
     let relay_mode = Config::relay_mode(cli.relays);
+    let log_svc = match &cli.cmd {
+        Cmd::Log { file, appenders, quorum, witnesses, .. } => {
+            let q = quorum.unwrap_or(witnesses.len());
+            anyhow::ensure!(q <= witnesses.len(), "кворум {q} больше числа свидетелей {}", witnesses.len());
+            Some(LogService::new(key.clone(), Some(file.clone().unwrap_or_else(|| home.join("log.json"))), appenders.clone(), q)?)
+        }
+        _ => None,
+    };
+    let witness_svc = match &cli.cmd {
+        Cmd::Witness { state, logs } => Some(WitnessService::new(key.clone(), Some(state.clone().unwrap_or_else(|| home.join("witness.json"))), logs.clone())?),
+        _ => None,
+    };
     let extra: Vec<(Vec<u8>, Handler)> = match &cli.cmd {
+        Cmd::Log { .. } => vec![(LOG_ALPN.to_vec(), Box::new(log_svc.clone().unwrap()))],
+        Cmd::Witness { .. } => vec![(WITNESS_ALPN.to_vec(), Box::new(witness_svc.clone().unwrap()))],
         Cmd::Resolver { trust } => vec![(NAMES_ALPN.to_vec(), Box::new(Resolver::new(trust.get()?)))],
         Cmd::Host { upstream: Some(u), upstream_insecure, .. } => vec![(HTTP_ALPN.to_vec(), Box::new(Host::proxy(u, *upstream_insecure)?))],
         Cmd::Host { static_dir: Some(d), .. } => vec![(HTTP_ALPN.to_vec(), Box::new(Host::static_dir(d)?))],
@@ -196,6 +260,37 @@ async fn main() -> Result<()> {
     let node = Node::bind(Config { key, relay_mode, lan: true, proxy: cli.proxy, bridge: cli.bridge, relay_ca: cli.relay_ca, vpn: None, extra }).await?;
     match cli.cmd {
         Cmd::Id | Cmd::Vpn { .. } | Cmd::Bridge { .. } => unreachable!(),
+        Cmd::Log { witnesses, .. } => {
+            node.endpoint().online().await;
+            let ws = parse_peers(&witnesses, &default_relay)?;
+            let relay = node.endpoint().addr().relay_urls().next().map(|r| format!("@{r}")).unwrap_or_default();
+            println!("Лог: {}{relay}\nэто ключ лога: им должны быть подписаны сертификаты, которые в него пишутся (control — зоны, владелец зоны — домены)\nСвидетелей: {}\n\nCtrl-C — выход.", node.id(), ws.len());
+            let (svc, ep) = (log_svc.unwrap(), node.endpoint().clone());
+            tokio::spawn(async move { svc.run(ep, ws).await });
+            tokio::signal::ctrl_c().await?;
+        }
+        Cmd::Witness { .. } => {
+            node.endpoint().online().await;
+            let relay = node.endpoint().addr().relay_urls().next().map(|r| format!("@{r}")).unwrap_or_default();
+            println!("Свидетель: {}{relay}\nклиенты доверяют ему так: --witness {}\n\nCtrl-C — выход.", node.id(), node.id());
+            tokio::signal::ctrl_c().await?;
+        }
+        Cmd::LogAdd { log, kind, cert } => {
+            let log = parse_peer(&log, default_relay.clone())?;
+            let text = std::fs::read_to_string(&cert).with_context(|| format!("не удалось прочитать {}", cert.display()))?;
+            let entry = rift_trust::log::entry_from_json(&kind, &text).map_err(anyhow::Error::msg)?;
+            let (index, size) = logsvc::append(node.endpoint(), log, entry).await?;
+            println!("{index}  (размер лога: {size})");
+        }
+        Cmd::LogProof { log, index, wait, out } => {
+            let log = parse_peer(&log, default_relay.clone())?;
+            let proof = logsvc::prove(node.endpoint(), log, index, Duration::from_secs(wait)).await?;
+            std::io::Write::write_all(
+                &mut std::fs::OpenOptions::new().write(true).create_new(true).open(&out).with_context(|| format!("{} уже существует", out.display()))?,
+                rift_trust::to_json(&proof).as_bytes(),
+            )?;
+            println!("{}  (голова размера {}, подписей: {})", out.display(), proof.head.body.size, proof.cosigs.len());
+        }
         Cmd::Resolver { .. } => {
             node.endpoint().online().await;
             let relay = node.endpoint().addr().relay_urls().next().map(|r| format!("@{r}")).unwrap_or_default();
