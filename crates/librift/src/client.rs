@@ -58,7 +58,8 @@ pub struct RiftClient {
     resolvers: Vec<EndpointAddr>,
     relay: Option<RelayUrl>,
     notices: AsyncMutex<NoticeCache>,
-    names: Mutex<HashMap<String, (Resolved, Instant)>>,
+    /// Имя → (результат, когда получен, сколько объявлений было известно). Новое объявление делает запись устаревшей.
+    names: Mutex<HashMap<String, (Resolved, Instant, usize)>>,
     conns: Mutex<HashMap<NodeId, Connection>>,
     hints: Mutex<HashMap<NodeId, EndpointAddr>>,
 }
@@ -84,16 +85,17 @@ impl RiftClient {
     }
 
     pub async fn resolve(&self, name: &str) -> Result<Resolved> {
-        if let Some((r, at)) = self.names.lock().unwrap().get(name) {
-            if at.elapsed() < NAME_TTL && now() < r.valid_until {
+        let mut cache = self.notices.lock().await;
+        if let Some((r, at, seen)) = self.names.lock().unwrap().get(name) {
+            // Свежий результат годится, только пока не появилось ни одного нового объявления: заморозка не ждёт TTL.
+            if at.elapsed() < NAME_TTL && now() < r.valid_until && *seen == cache.all().len() {
                 return Ok(r.clone());
             }
         }
-        let mut cache = self.notices.lock().await;
         let r = resolve(&self.endpoint, &self.resolvers, &self.trust, name, &mut cache).await;
         match &r {
             Ok(r) => {
-                self.names.lock().unwrap().insert(name.to_string(), (r.clone(), Instant::now()));
+                self.names.lock().unwrap().insert(name.to_string(), (r.clone(), Instant::now(), cache.all().len()));
             }
             // Заморозка действует сразу: из кэша имён выкидываем.
             Err(e) if e.downcast_ref::<Blocked>().is_some() => {
@@ -102,6 +104,12 @@ impl RiftClient {
             Err(_) => {}
         }
         r
+    }
+
+    /// Подтягивает объявления (заморозки, отзывы) у резолверов. Возвращает число новых.
+    pub async fn sync_notices(&self) -> usize {
+        let mut cache = self.notices.lock().await;
+        crate::names::sync_notices(&self.endpoint, &self.resolvers, &self.trust.root, &mut cache).await
     }
 
     async fn connection(&self, host: NodeId, fresh: bool) -> Result<Connection> {
@@ -148,7 +156,7 @@ impl RiftClient {
     }
 
     /// Выполняет запрос к `rift://`-сайту. Хост берётся из URI или заголовка `Host`; путь и тело — как есть.
-    pub async fn request<B>(&self, mut req: Request<B>) -> Result<Response<Incoming>>
+    pub async fn request<B>(&self, req: Request<B>) -> Result<Response<Incoming>>
     where
         B: HttpBody + Send + 'static,
         B::Data: Send,
@@ -161,13 +169,23 @@ impl RiftClient {
             .or_else(|| req.headers().get(header::HOST).and_then(|h| h.to_str().ok()).map(|h| h.split(':').next().unwrap_or(h).to_string()))
             .context("в запросе нет хоста")?;
         let name = rift_name(&host).with_context(|| format!("{host}: это не имя Rift (ожидалось имя.зона или имя.зона.rift)"))?;
+        self.request_to(&name, req).await
+    }
 
+    /// То же, но имя задано явно (для шлюза: там голое `shop.brand` — точно имя Rift, а не домен из интернета).
+    pub async fn request_to<B>(&self, name: &str, mut req: Request<B>) -> Result<Response<Incoming>>
+    where
+        B: HttpBody + Send + 'static,
+        B::Data: Send,
+        B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    {
+        let host = name;
         // На хост уходит origin-form; `Host` оставляем исходным: хост-прокси сам подставит нужный.
         let pq = req.uri().path_and_query().map_or_else(|| "/".to_string(), |p| p.as_str().to_string());
         *req.uri_mut() = pq.parse()?;
         req.headers_mut().insert(header::HOST, HeaderValue::from_str(&host)?);
 
-        let resolved = self.resolve(&name).await?;
+        let resolved = self.resolve(name).await?;
         let (send, recv) = self.open_stream(&resolved.hosts).await?;
         let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(tokio::io::join(recv, send))).await?;
         tokio::spawn(async move {
@@ -176,6 +194,19 @@ impl RiftClient {
             }
         });
         Ok(sender.send_request(req).await?)
+    }
+
+    pub fn trust(&self) -> &Trust {
+        &self.trust
+    }
+
+    pub fn resolver_count(&self) -> usize {
+        self.resolvers.len()
+    }
+
+    /// NodeID этого клиента: под ним он виден хостам (`Rift-Client-Id`).
+    pub fn node_id(&self) -> NodeId {
+        self.endpoint.id()
     }
 
     /// Сколько соединений с хостами сейчас в пуле (для тестов и диагностики).
@@ -231,15 +262,13 @@ async fn proxy_one(client: &RiftClient, mut req: Request<Incoming>) -> Response<
 
 #[cfg(test)]
 mod tests {
-    use iroh::SecretKey;
     use rift_trust::{Announcement, Notice, Signed};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
     use crate::{
-        host::Host,
-        names::{NAMES_ALPN, Request as NamesRequest, Resolver, publish},
-        testutil::{bundle, node, trust},
+        names::Request as NamesRequest,
+        testutil::{Site, hello_app, site},
     };
 
     #[test]
@@ -261,45 +290,11 @@ mod tests {
         }
     }
 
-    struct Setup {
-        client: Arc<RiftClient>,
-        resolver_node: crate::Node,
-        resolver: Resolver,
-        root: SecretKey,
-        _host: crate::Node,
-    }
+    type Setup = Site;
 
     /// Хост с приложением (отвечает «hello <путь>»), резолвер, клиент.
     async fn setup() -> Setup {
-        let k = SecretKey::generate;
-        let (root, control, zone, owner) = (k(), k(), k(), k());
-        let app = {
-            let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let addr = l.local_addr().unwrap().to_string();
-            tokio::spawn(async move {
-                while let Ok((mut c, _)) = l.accept().await {
-                    tokio::spawn(async move {
-                        let mut buf = [0u8; 2048];
-                        let n = c.read(&mut buf).await.unwrap_or(0);
-                        let path = String::from_utf8_lossy(&buf[..n]).split_whitespace().nth(1).unwrap_or("?").to_string();
-                        let body = format!("hello {path}");
-                        c.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.ok();
-                    });
-                }
-            });
-            addr
-        };
-        let host = node(vec![(HTTP_ALPN.to_vec(), Box::new(Host::proxy(&app, false).unwrap()))]).await;
-        let resolver = Resolver::new(trust(&root));
-        let resolver_node = node(vec![(NAMES_ALPN.to_vec(), Box::new(resolver.clone()))]).await;
-        let b = bundle(&root, &control, &zone, &owner, host.id(), 1);
-        assert_eq!(publish(host.endpoint(), &[resolver_node.endpoint().addr()], NamesRequest::PutBundle(b)).await, 1);
-
-        let me = node(vec![]).await;
-        let client = Arc::new(RiftClient::new(me.endpoint().clone(), trust(&root), vec![resolver_node.endpoint().addr()], None, NoticeCache::memory()));
-        client.add_hint(host.endpoint().addr());
-        std::mem::forget(me); // нода клиента должна жить, пока жив тест
-        Setup { client, resolver_node, resolver, root, _host: host }
+        site(&hello_app().await).await
     }
 
     async fn body_of(resp: Response<Incoming>) -> String {
@@ -335,10 +330,11 @@ mod tests {
         let s = setup().await;
         assert!(s.client.request(get("http://shop.brand.rift/")).await.is_ok());
 
-        // Заморозка пришла на резолвер; кэш имён (60 с) ещё держит старое — после его сброса домен закрыт.
+        // Заморозка пришла на резолвер. Кэш имён (60 с) ещё свеж, но клиент узнаёт об объявлении, и запись устаревает сразу.
         let freeze = Announcement { notice: Signed::sign(Notice::Freeze { name: "shop.brand".into(), since: 0 }, &s.root), control: None };
         s.resolver.handle(NamesRequest::PutNotice(freeze));
-        s.client.names.lock().unwrap().clear();
+        assert!(s.client.request(get("http://shop.brand.rift/")).await.is_ok(), "пока клиент не знает об объявлении, кэш действует");
+        assert_eq!(s.client.sync_notices().await, 1);
         let err = s.client.request(get("http://shop.brand.rift/")).await.unwrap_err();
         assert!(err.downcast_ref::<Blocked>().is_some(), "{err:#}");
         assert!(s.client.names.lock().unwrap().is_empty());

@@ -50,9 +50,12 @@ pub fn load_or_create_key(path: &Path) -> Result<SecretKey> {
 
 pub mod bridge;
 pub mod client;
+pub mod devnet;
+pub mod gateway;
 pub mod host;
 pub mod logsvc;
 pub mod names;
+pub mod pages;
 pub mod vpn;
 
 #[cfg(test)]
@@ -302,4 +305,14 @@ mod tests {
         assert!(tunnels.load(Ordering::SeqCst) > 0, "relay подключился мимо прокси");
         node.shutdown().await
     }
+}
+
+/// `NodeID` или `NodeID@relay-url`; без `@relay` берётся `default_relay`.
+pub fn parse_peer(s: &str, default_relay: Option<RelayUrl>) -> Result<EndpointAddr> {
+    let (id, relay) = match s.split_once('@') {
+        Some((id, relay)) => (id, Some(relay.parse().context("кривой relay-url")?)),
+        None => (s, default_relay),
+    };
+    let id: NodeId = id.parse().with_context(|| format!("кривой NodeID: {id}"))?;
+    Ok(EndpointAddr::from_parts(id, relay.map(TransportAddr::Relay)))
 }

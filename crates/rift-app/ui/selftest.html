@@ -1,0 +1,47 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>rift selftest</title>
+<style>
+  body { font: 14px -apple-system, system-ui, sans-serif; margin: 28px; color: #111827; background: #fff; }
+  @media (prefers-color-scheme: dark) { body { color: #e5e7eb; background: #15171a; } td { border-color: #333 !important; } }
+  h2 { margin: 0 0 6px; } p { margin: 0 0 14px; opacity: .7; }
+  table { border-collapse: collapse; } td { padding: 4px 12px 4px 0; border-bottom: 1px solid #ddd; vertical-align: top; } td:first-child { opacity: .6; white-space: nowrap; }
+</style>
+<body>rift selftest</body>
+<script>
+(async () => {
+  const sink = new URL(location.href).searchParams.get('sink');
+  const r = { url: location.href, secure: window.isSecureContext };
+  const t = async (f) => { try { return await f(); } catch (e) { return 'ERR ' + e.name + ': ' + e.message; } };
+  r.subtle = await t(async () => (await crypto.subtle.digest('SHA-256', new TextEncoder().encode('rift'))).byteLength);
+  r.randomUUID = await t(async () => crypto.randomUUID().length);
+  r.localStorage = await t(async () => { localStorage.setItem('k', 'v'); return localStorage.getItem('k'); });
+  // Cookie: HttpOnly-сессия, которую ставит приложение, и обычная, которую ставит страница.
+  r.cookies = await t(async () => {
+    await fetch('/login');
+    document.cookie = 'js=1; path=/';
+    const w = await (await fetch('/whoami')).json();
+    return { server_saw_cookie: w.cookie, origin: w.origin, host: w.host, xfh: w.xfh, xfp: w.xfp, has_client_id: !!w.id };
+  });
+  r.redirect = await t(async () => { const x = await fetch('/redirect'); return `${x.status} redirected=${x.redirected} ${new URL(x.url).pathname}`; });
+  r.serviceWorker = await t(async () => { await navigator.serviceWorker.register('/sw.js'); return 'registered'; });
+  r.webSocket = await t(() => new Promise((res) => {
+    const ws = new WebSocket('ws://' + location.host + '/ws');
+    const timer = setTimeout(() => res('timeout'), 8000);
+    ws.onopen = () => ws.send('ping-from-webview');
+    ws.onmessage = (e) => { clearTimeout(timer); res('echo: ' + e.data); ws.close(); };
+    ws.onerror = () => { clearTimeout(timer); res('ERR onerror'); };
+  }));
+  // Страница сайта — чужой код: к командам приложения (навигация, закладки, кошелёк…) у неё доступа быть не должно.
+  r.ipc = await t(async () => {
+    const invoke = window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke;
+    if (!invoke) return 'нет API';
+    try { await invoke('navigate', { input: 'rift://shop.brand/' }); return 'РАЗРЕШЕНО (плохо)'; }
+    catch (e) { return 'отказ: ' + String(e).slice(0, 60); }
+  });
+  const rows = Object.entries(r).map(([k, v]) => `<tr><td>${k}</td><td>${typeof v === 'string' ? v : JSON.stringify(v)}</td></tr>`).join('');
+  document.body.innerHTML = '<h2>Этот сайт живёт в сети Rift</h2><p>Страница, cookie, WebSocket и Service Worker идут через QUIC от ноды-хоста; ниже — что видит WebView.</p><table>' + rows + '</table>';
+  if (!sink) return;
+  new Image().src = sink + '/?d=' + encodeURIComponent(JSON.stringify(r));
+})();
+</script>

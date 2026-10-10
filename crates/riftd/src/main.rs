@@ -7,7 +7,7 @@ use librift::client::{RiftClient, serve_proxy};
 use librift::host::{HTTP_ALPN, Host};
 use librift::logsvc::{self, LOG_ALPN, LogService, WITNESS_ALPN, WitnessService};
 use librift::names::{self, NAMES_ALPN, NoticeCache, Request, Resolver};
-use librift::{Config, EndpointAddr, Handler, Node, NodeId, RelayUrl, SecretKey, TransportAddr, Url, load_or_create_key, vpn};
+use librift::{Config, EndpointAddr, Handler, parse_peer, Node, NodeId, RelayUrl, SecretKey, TransportAddr, Url, load_or_create_key, vpn};
 use rift_trust::{Announcement, Bundle, PublicKey, Trust};
 
 /// Кому верит клиент: root и свидетели логов. В приложении это вшито, здесь — флаги для разработки.
@@ -455,15 +455,6 @@ async fn main() -> Result<()> {
     node.shutdown().await
 }
 
-/// `NodeID` или `NodeID@relay-url`.
-fn parse_peer(s: &str, default_relay: Option<RelayUrl>) -> Result<EndpointAddr> {
-    let (id, relay) = match s.split_once('@') {
-        Some((id, relay)) => (id, Some(relay.parse().context("кривой relay-url")?)),
-        None => (s, default_relay),
-    };
-    let id: NodeId = id.parse().with_context(|| format!("кривой NodeID: {id}"))?;
-    Ok(EndpointAddr::from_parts(id, relay.map(TransportAddr::Relay)))
-}
 
 /// Ключ моста хранится в `<home>/bridge`: приватный ключ, публичный ключ, short id — по строке.
 async fn run_bridge(home: &std::path::Path, listen: SocketAddr, dest: &str, upstream: &str, public: &str) -> Result<()> {

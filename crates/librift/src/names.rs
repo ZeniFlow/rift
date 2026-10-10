@@ -299,7 +299,11 @@ pub async fn resolve(
                 match check(trust, name, resp, now(), cache.all()) {
                     Ok(Some(x)) => found.push(x),
                     Ok(None) => {}
-                    Err(e @ (TrustError::Frozen(_) | TrustError::Revoked(_))) => return Err(Blocked(format!("{name}: {e}")).into()),
+                    Err(e @ (TrustError::Frozen(_) | TrustError::Revoked(_))) => {
+                    // «заморожен оператором сети» уже называет сайт; «отозван» — нет.
+                    let text = if matches!(e, TrustError::Frozen(_)) { e.to_string() } else { format!("{name}: {e}") };
+                    return Err(Blocked(text).into());
+                }
                     Err(e) => last_err = Some(e.to_string()),
                 }
             }

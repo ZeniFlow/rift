@@ -1,0 +1,31 @@
+[package]
+name = "rift-app"
+description = "Браузер Rift (Tauri 2): rift:// сайты, VPN и кошелёк в одном окне"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[build-dependencies]
+tauri-build = "2"
+
+[dependencies]
+anyhow.workspace = true
+tauri = { version = "2", features = ["unstable"] }
+tokio.workspace = true
+serde_json = "1"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1.12.1"
+librift = { version = "0.0.1", path = "../librift" }
+rift-trust = { version = "0.0.1", path = "../rift-trust" }
+sha1 = "0.11.0"
+base64 = "0.23.1"
+serde = { version = "1.0.229", features = ["derive"] }
+
+# Проверка настоящих рамок нативных видов (WKWebView) в самопроверке: Tauri-обёртка округляет и скрывает ошибки раскладки.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSView", "NSResponder", "NSWindow", "NSButton", "NSControl"] }
+objc2-foundation = "0.3"

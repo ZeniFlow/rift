@@ -242,7 +242,7 @@ impl fmt::Display for Error {
             Error::OutsideParentWindow(w) => write!(f, "{w} выпущен вне срока родителя"),
             Error::Mismatch(w) => write!(f, "не сходится: {w}"),
             Error::Revoked(w) => write!(f, "отозван: {w}"),
-            Error::Frozen(n) => write!(f, "{n} заморожен control"),
+            Error::Frozen(n) => write!(f, "{n} заморожен оператором сети"),
             Error::Log(w, why) => write!(f, "лог ({w}): {why}"),
         }
     }

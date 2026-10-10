@@ -142,6 +142,13 @@ rift-ca notice --key root.key --unfreeze shop.brand -o unfreeze.json     # сн�
 сохраняет увиденные объявления в `<home>/notices.json`: раз увидев заморозку, он не откроет домен, даже если
 отставший или злонамеренный резолвер её промолчит.
 
+### Браузер (окно)
+
+```bash
+cargo run -p rift-app -- demo          # окно с сайтом в сети Rift, поднятой в процессе (подробнее: docs/browser.md)
+cargo run -p rift-app -- selftest-ui   # автоматическая проверка окна: адрес, история, cookie, WebSocket, заморозка
+```
+
 ### Открыть сайт в браузере (прокси)
 
 ```bash
