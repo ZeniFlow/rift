@@ -1,0 +1,14 @@
+[package]
+name = "riftd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+iroh.workspace = true
+tokio.workspace = true
+librift = { path = "../librift" }
+clap = { version = "4", features = ["derive", "env"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
