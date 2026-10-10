@@ -8,13 +8,15 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
+use iroh_mdns_address_lookup::MdnsAddressLookup;
 use iroh::{
-    Endpoint, EndpointAddr, RelayMode, SecretKey,
+    Endpoint,
     endpoint::{Connection, RecvStream, SendStream, presets},
     protocol::{AcceptError, ProtocolHandler, Router},
 };
 
-pub use iroh::{EndpointId as NodeId, RelayUrl, TransportAddr};
+pub use url::Url;
+pub use iroh::{EndpointAddr, EndpointId as NodeId, RelayMode, RelayUrl, SecretKey, TransportAddr};
 
 pub const PING_ALPN: &[u8] = b"rift/ping/0";
 
@@ -45,30 +47,56 @@ pub fn load_or_create_key(path: &Path) -> Result<SecretKey> {
     }
 }
 
+pub mod vpn;
+
+/// Настройки ноды.
+pub struct Config {
+    pub key: SecretKey,
+    /// `RelayMode::Default` — публичные relay n0, только для разработки.
+    pub relay_mode: RelayMode,
+    /// Искать ноды в локальной сети через mDNS.
+    pub lan: bool,
+    /// HTTP CONNECT-прокси для трафика к relay: сюда подключается маскирующий транспорт
+    /// (Xray / sing-box / shoes с REALITY и т.п.). Прямые UDP-пути через прокси не идут.
+    pub proxy: Option<url::Url>,
+    pub vpn: Option<vpn::Vpn>,
+}
+
+impl Config {
+    pub fn relay_mode(relays: Vec<RelayUrl>) -> RelayMode {
+        if relays.is_empty() {
+            RelayMode::Default
+        } else {
+            RelayMode::Custom(relays.into_iter().collect())
+        }
+    }
+}
+
 /// Нода Rift: iroh-endpoint + обработчики протоколов.
 pub struct Node {
     router: Router,
 }
 
 impl Node {
-    /// `relays` пустой → публичные relay n0 (только для разработки).
-    pub async fn bind(key: SecretKey, relays: Vec<RelayUrl>) -> Result<Self> {
-        let mode = if relays.is_empty() {
-            RelayMode::Default
-        } else {
-            RelayMode::Custom(relays.into_iter().collect())
-        };
-        Self::bind_with(key, mode).await
-    }
-
-    pub async fn bind_with(key: SecretKey, relay_mode: RelayMode) -> Result<Self> {
-        let endpoint = Endpoint::builder(presets::Minimal)
-            .secret_key(key)
-            .relay_mode(relay_mode)
-            .bind()
-            .await?;
-        let router = Router::builder(endpoint).accept(PING_ALPN, Pong).spawn();
-        Ok(Self { router })
+    pub async fn bind(cfg: Config) -> Result<Self> {
+        let mut builder = Endpoint::builder(presets::Minimal)
+            .secret_key(cfg.key)
+            .relay_mode(cfg.relay_mode);
+        if let Some(proxy) = cfg.proxy {
+            builder = builder.proxy_url(proxy);
+        }
+        #[cfg(test)]
+        {
+            builder = builder.ca_tls_config(iroh::tls::CaTlsConfig::insecure_skip_verify());
+        }
+        if cfg.lan {
+            builder = builder.address_lookup(MdnsAddressLookup::builder().service_name("rift"));
+        }
+        let mut router = Router::builder(builder.bind().await?).accept(PING_ALPN, Pong);
+        if let Some(vpn) = cfg.vpn {
+            router = router.accept(vpn::VPN_ALPN, vpn);
+        }
+        Ok(Self { router: router.spawn() })
     }
 
     pub fn endpoint(&self) -> &Endpoint {
@@ -164,8 +192,9 @@ mod tests {
 
     #[tokio::test]
     async fn ping_over_localhost() -> Result<()> {
-        let a = Node::bind_with(SecretKey::generate(), RelayMode::Disabled).await?;
-        let b = Node::bind_with(SecretKey::generate(), RelayMode::Disabled).await?;
+        let cfg = || Config { key: SecretKey::generate(), relay_mode: RelayMode::Disabled, lan: false, proxy: None, vpn: None };
+        let a = Node::bind(cfg()).await?;
+        let b = Node::bind(cfg()).await?;
         let mut p = a.pinger(b.endpoint().addr()).await?;
         for _ in 0..3 {
             let (_, path) = p.ping().await?;
@@ -186,5 +215,56 @@ mod tests {
         assert_eq!(k1.public(), k2.public());
         std::fs::remove_dir_all(dir)?;
         Ok(())
+    }
+
+    /// Весь трафик к relay должен идти через прокси — иначе маскировка дырявая.
+    #[tokio::test]
+    async fn relay_traffic_goes_through_proxy() -> Result<()> {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let (relay_map, _url, _server) = iroh::test_utils::run_relay_server_with(false).await?;
+
+        // Минимальный HTTP CONNECT-прокси, считает туннели.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let proxy: url::Url = format!("http://{}", listener.local_addr()?).parse()?;
+        let tunnels = Arc::new(AtomicUsize::new(0));
+        let counter = tunnels.clone();
+        tokio::spawn(async move {
+            while let Ok((client, _)) = listener.accept().await {
+                let counter = counter.clone();
+                tokio::spawn(async move {
+                    let mut client = BufReader::new(client);
+                    let mut line = String::new();
+                    client.read_line(&mut line).await?;
+                    let target = line.split_whitespace().nth(1).unwrap_or_default().to_string();
+                    while line != "\r\n" {
+                        line.clear();
+                        client.read_line(&mut line).await?;
+                    }
+                    let mut upstream = tokio::net::TcpStream::connect(target).await?;
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    let mut client = client.into_inner();
+                    client.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n").await?;
+                    tokio::io::copy_bidirectional(&mut client, &mut upstream).await?;
+                    anyhow::Ok(())
+                });
+            }
+        });
+
+        let node = Node::bind(Config {
+            key: SecretKey::generate(),
+            relay_mode: RelayMode::Custom(relay_map),
+            lan: false,
+            proxy: Some(proxy),
+            vpn: None,
+        })
+        .await?;
+        tokio::time::timeout(Duration::from_secs(10), node.endpoint().online()).await?;
+        assert!(tunnels.load(Ordering::SeqCst) > 0, "relay подключился мимо прокси");
+        node.shutdown().await
     }
 }

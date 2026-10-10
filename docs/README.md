@@ -6,6 +6,7 @@
 | Документ | О чём |
 |---|---|
 | [architecture.md](architecture.md) | Слои, роли нод, транспорт, NAT, маскировка, VPN, хостинг, кошелёк, сборка, фазы |
+| [bridge.md](bridge.md) | Мост: как замаскировать трафик к relay под TLS к чужому сайту (REALITY) |
 | [trust.md](trust.md) | Цепочка доверия: root → control → зона → регистратор → домен. Отказы, takedown |
 | [questions.md](questions.md) | Открытые вопросы. Отвечай по номерам |
 | [prior-art.md](prior-art.md) | Что уже существует и что берём |

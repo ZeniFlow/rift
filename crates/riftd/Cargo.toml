@@ -7,7 +7,6 @@ repository.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-iroh.workspace = true
 tokio.workspace = true
 librift = { path = "../librift" }
 clap = { version = "4", features = ["derive", "env"] }
