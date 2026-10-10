@@ -8,6 +8,8 @@
 mod browser;
 mod native;
 mod selftest;
+mod settings;
+mod store;
 
 /// `generate_context!` можно вызвать в бинарнике только один раз.
 pub fn context() -> tauri::Context {

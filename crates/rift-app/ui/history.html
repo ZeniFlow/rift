@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ru" data-motion="system" data-blur="off">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>История</title>
+<link rel="stylesheet" href="kit.css">
+<link rel="stylesheet" href="page.css">
+</head>
+<body>
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol>
+</svg>
+<header class="topbar">
+  <h1>История</h1>
+  <label class="search"><svg class="i"><use href="#i-search"/></svg><input id="q" type="search" placeholder="Поиск по истории" autocomplete="off" spellcheck="false" aria-label="Поиск по истории"></label>
+  <button class="button" id="clear"><svg class="i"><use href="#i-trash"/></svg>Очистить</button>
+</header>
+<main class="wrap" id="main"></main>
+<script src="kit.js"></script>
+<script>
+  const { h, icon } = Kit;
+  const { invoke } = window.__TAURI__.core;
+  const { listen, emit } = window.__TAURI__.event;
+  const go = (input) => invoke("navigate", { input });
+  const hostOf = (u) => u.replace(/^[a-z]+:\/\//i, "").split(/[\/?#]/)[0];
+  listen("settings", (e) => Kit.applySettings(e.payload));
+  invoke("get_caps").then((c) => { Kit.caps.blur = c.blur; return invoke("get_settings"); }).then((s) => Kit.applySettings(s));
+  const day = (ts) => {
+    const d = new Date(ts), t = new Date(), y = new Date(t.getTime() - 864e5), same = (a, b) => a.toDateString() === b.toDateString();
+    return same(d, t) ? 'Сегодня' : same(d, y) ? 'Вчера' : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: d.getFullYear() === t.getFullYear() ? undefined : 'numeric' });
+  };
+  const main = document.getElementById('main'), q = document.getElementById('q');
+  async function load() {
+    const list = await invoke('history_list', { query: q.value, limit: 500 });
+    main.textContent = '';
+    if (!list.length) { main.append(h('div', { class: 'empty', id: 'empty' }, q.value ? 'Ничего не найдено.' : 'История пуста. Открытые страницы появятся здесь.')); report(0); return; }
+    let box = null, last = '';
+    for (const e of list) {
+      const d = day(e.ts);
+      if (d !== last) { last = d; main.append(h('div', { class: 'day' }, d)); box = h('div', { class: 'list' }); main.append(box); }
+      box.append(h('div', { class: 'item', role: 'link', tabindex: 0, 'data-url': e.url, onclick: () => go(e.url), onkeydown: (ev) => { if (ev.key === 'Enter') go(e.url); } },
+        h('span', { class: 'time' }, new Date(e.ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })),
+        h('span', { class: 'main' }, h('span', { class: 'name' }, e.title || e.url), h('span', { class: 'addr' }, e.url)),
+        h('button', { class: 'icon-btn rm', title: 'Удалить из истории', 'aria-label': 'Удалить из истории', onclick: (ev) => { ev.stopPropagation(); invoke('history_forget', { urls: [e.url] }); } }, icon('x'))));
+    }
+    report(list.length);
+  }
+  const report = (n) => emit('page-state', { page: 'history', ready: true, count: n });
+  q.addEventListener('input', load);
+  listen('history', load);
+  document.getElementById('clear').addEventListener('click', async () => {
+    const ok = await invoke('overlay_ask', { spec: { kind: 'confirm', title: 'Очистить историю?', text: 'Все записи о посещённых страницах будут удалены. Закладки останутся.', confirmLabel: 'Очистить', danger: true } });
+    if (ok === true) invoke('history_clear');
+  });
+  load();
+</script>
+</body>
+</html>

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="ru" data-motion="system" data-blur="off">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Закладки</title>
+<link rel="stylesheet" href="kit.css">
+<link rel="stylesheet" href="page.css">
+</head>
+<body>
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol>
+</svg>
+<header class="topbar">
+  <h1>Закладки</h1>
+  <label class="search"><svg class="i"><use href="#i-search"/></svg><input id="q" type="search" placeholder="Поиск по закладкам" autocomplete="off" spellcheck="false" aria-label="Поиск по закладкам"></label>
+</header>
+<main class="wrap" id="main"></main>
+<script src="kit.js"></script>
+<script>
+  const { h, icon } = Kit;
+  const { invoke } = window.__TAURI__.core;
+  const { listen, emit } = window.__TAURI__.event;
+  const go = (input) => invoke("navigate", { input });
+  const hostOf = (u) => u.replace(/^[a-z]+:\/\//i, "").split(/[\/?#]/)[0];
+  listen("settings", (e) => Kit.applySettings(e.payload));
+  invoke("get_caps").then((c) => { Kit.caps.blur = c.blur; return invoke("get_settings"); }).then((s) => Kit.applySettings(s));
+  const main = document.getElementById('main'), q = document.getElementById('q');
+  async function load() {
+    const all = await invoke('bookmarks_list'), s = q.value.trim().toLowerCase();
+    const list = all.filter((e) => !s || e.url.toLowerCase().includes(s) || e.title.toLowerCase().includes(s));
+    main.textContent = '';
+    if (!list.length) main.append(h('div', { class: 'empty', id: 'empty' }, s ? 'Ничего не найдено.' : 'Закладок пока нет. Нажмите звёздочку в адресной строке, чтобы добавить страницу.'));
+    else main.append(h('div', { class: 'list' }, list.map((e) => h('div', { class: 'item', role: 'link', tabindex: 0, 'data-url': e.url, onclick: () => go(e.url), onkeydown: (ev) => { if (ev.key === 'Enter') go(e.url); } },
+      h('span', { class: 'dot' }, (hostOf(e.url)[0] || '?')),
+      h('span', { class: 'main' }, h('span', { class: 'name' }, e.title || e.url), h('span', { class: 'addr' }, e.url)),
+      h('button', { class: 'icon-btn rm', title: 'Удалить закладку', 'aria-label': 'Удалить закладку', onclick: (ev) => { ev.stopPropagation(); invoke('bookmark_remove', { url: e.url }); } }, icon('x'))))));
+    emit('page-state', { page: 'bookmarks', ready: true, count: list.length });
+  }
+  q.addEventListener('input', load);
+  listen('bookmarks', load);
+  load();
+</script>
+</body>
+</html>

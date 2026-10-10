@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="ru" data-motion="system" data-blur="off" data-mode="full">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Rift: слой</title>
+<link rel="stylesheet" href="kit.css">
+<style>
+  html, body { height: 100%; margin: 0; background: transparent; overflow: hidden; }
+  /* подсказки адреса: слой в этот момент ровно по размеру списка */
+  #suggest { position: fixed; inset: 0; padding: 6px; background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-l); box-shadow: 0 16px 48px rgb(0 0 0 / .55); overflow: hidden; opacity: 0; transform: translateY(calc(var(--pop-shift) / 2)); transition: opacity calc(140ms * var(--m)) var(--ease), transform calc(160ms * var(--m)) var(--ease); }
+  #suggest.in { opacity: 1; transform: none; }
+  .sug { display: flex; align-items: center; gap: 12px; width: 100%; height: 44px; padding: 0 12px; border: 0; border-radius: var(--r-m); background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+  .sug[aria-selected="true"], .sug:hover { background: var(--raised-2); }
+  .sug svg { color: var(--text-3); flex: none; }
+  .sug[data-kind="bookmark"] svg { color: var(--accent); }
+  .sug .main { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.25; }
+  .sug .t, .sug .u { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sug .u { color: var(--text-3); font-size: 12px; }
+</style>
+</head>
+<body>
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></symbol>
+  <symbol id="i-ok" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-unverified" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="M12 8v4"/><path d="M12 16h.01"/></symbol>
+  <symbol id="i-blocked" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></symbol>
+  <symbol id="i-web" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></symbol>
+  <symbol id="i-error" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M21 4h-7"/><path d="M10 4H3"/><path d="M21 12h-9"/><path d="M8 12H3"/><path d="M21 20h-5"/><path d="M12 20H3"/><path d="M14 2v4"/><path d="M8 10v4"/><path d="M16 18v4"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/></symbol>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+</svg>
+
+<div id="root"><div id="toasts" aria-live="polite"></div></div>
+
+<script src="kit.js"></script>
+<script>
+  const { h, icon } = Kit;
+  const { invoke } = window.__TAURI__.core;
+  const { listen, emit } = window.__TAURI__.event;
+
+  /* ---- связь компонентов со средой ---- */
+  let mode = 'hidden', lastBlur = null;
+  const modeAttr = (m) => { document.documentElement.dataset.mode = m; };
+  // Обе функции возвращают обещание: оно выполняется, когда слой уже показан (см. Kit: анимация входа ждёт его).
+  Kit.host.full = () => { hideSuggest(); if (mode !== 'full') { mode = 'full'; modeAttr('full'); return invoke('overlay_mode', { mode: 'full' }); } };
+  Kit.host.rect = (r) => { if (r && Kit.state().layers === 0) { hideSuggest(); mode = 'rect'; modeAttr('rect'); return invoke('overlay_mode', { mode: 'rect', w: r.w, h: r.h }).then((v) => { report('rect'); return v; }); } };
+  Kit.host.shown = () => report('shown');
+  Kit.host.hide = () => { mode = 'hidden'; invoke('overlay_hide'); report('hide'); };
+  Kit.host.blur = (region) => { lastBlur = region; invoke('overlay_blur', { region }); };
+  Kit.host.result = (id, value) => invoke('overlay_result', { id, value });
+
+  /* ---- подсказки адреса: не слой Kit, фокус не берут (ввод остаётся в панели) ---- */
+  const ROW = 44, PAD = 12;
+  let sugOn = false, sugKey = '';
+  const sugBox = () => document.getElementById('suggest') || document.body.appendChild(h('div', { id: 'suggest', role: 'listbox', 'aria-label': 'Подсказки' }));
+  function hideSuggest() {
+    if (!sugOn) return;
+    sugOn = false; sugKey = ''; const b = document.getElementById('suggest');
+    b.classList.remove('in');
+    if (Kit.state().layers === 0 && Kit.state().toasts === 0 && mode === 'suggest') { mode = 'hidden'; modeAttr('hidden'); invoke('overlay_hide'); invoke('overlay_blur', { region: null }); }
+    setTimeout(() => { if (!sugOn) b.textContent = ''; }, 200);
+    report('suggest-hide');
+  }
+  async function showSuggest(s) {
+    if (Kit.state().layers > 0) return;   // меню и окна важнее подсказок
+    Kit.clearToasts();                    // а подсказки важнее уведомлений: слой один, и он нужен им
+    const a = s.anchor, w = Math.round(a.w), x = Math.round(a.x), y = Math.round(a.y + a.h + 6), hh = s.items.length * ROW + PAD;
+    const key = `${x},${y},${w},${hh}`, box = sugBox();
+    box.textContent = '';
+    s.items.forEach((it, i) => box.append(h('button', { class: 'sug', role: 'option', 'aria-selected': String(i === s.sel), 'data-kind': it.kind, 'data-url': it.url, tabindex: '-1',
+      // pointerdown, а не click: фокус уходит из панели раньше, и панель сразу прячет подсказки
+      onpointerdown: (e) => { e.preventDefault(); hideSuggest(); emit('suggest-pick', { url: it.url }); } },
+      icon(it.kind === 'bookmark' ? 'star' : 'clock'), h('span', { class: 'main' }, h('span', { class: 't' }, it.title && it.title !== it.url ? it.title : it.url), it.title && it.title !== it.url ? h('span', { class: 'u' }, it.url) : null))));
+    if (key !== sugKey) {
+      sugKey = key; mode = 'suggest'; modeAttr('suggest');
+      await invoke('overlay_mode', { mode: 'at', x, y, w, h: hh });
+    }
+    if (!sugOn) { void box.offsetWidth; }
+    sugOn = true; box.classList.add('in');
+    Kit.host.blur(Kit.settings.blur !== 'off' && Kit.caps.blur ? { x: 0, y: 0, w, h: hh, r: 14 } : null);
+    report('suggest');
+  }
+
+  /* Состояние для самопроверки приложения (`rift-app selftest-ui`). */
+  function report(what) {
+    const top = document.querySelector('#root > .surface:last-of-type:not(.toast)');
+    emit('overlay-state', { what, ...Kit.state(), suggest: sugOn ? [...document.querySelectorAll('.sug')].map((b) => b.dataset.url) : [], mode, blur: lastBlur, rect: top ? { x: top.offsetLeft, y: top.offsetTop, w: top.offsetWidth, h: top.offsetHeight } : null, settings: Kit.settings });
+  }
+  new MutationObserver(() => setTimeout(() => report('layers'), 0)).observe(document.getElementById('root'), { childList: true });
+
+  /* ---- содержимое ---- */
+  const SITE = {
+    ok: { icon: 'ok', tone: 'tone-ok', title: 'Сайт проверен', text: 'Имя и владелец подтверждены подписями от корневого ключа Rift. Содержимое приходит напрямую от хоста сайта и передаётся в зашифрованном виде.' },
+    blocked: { icon: 'blocked', tone: 'tone-bad', title: 'Сайт заморожен', text: 'Оператор сети закрыл доступ к этому имени. Решение подписано и опубликовано, поэтому действует на всех устройствах.' },
+    unverified: { icon: 'unverified', tone: 'tone-warn', title: 'Сайт не проверен', text: 'Цепочку подписей для этого имени подтвердить не удалось, поэтому сайт показан без гарантий.' },
+    web: { icon: 'web', tone: 'tone-neutral', title: 'Обычный сайт', text: 'Соединение идёт через интернет, мимо сети Rift. Подписи Rift владельца этого сайта не проверяют.' },
+    error: { icon: 'error', tone: 'tone-bad', title: 'Не удалось открыть адрес', text: '' },
+  };
+  const short = (hex) => (hex && hex.length > 14 ? `${hex.slice(0, 8)}…${hex.slice(-4)}` : hex || '');
+
+  function siteContent({ state, facts = {}, detail = '' }) {
+    const s = SITE[state] || SITE.web;
+    const keys = state === 'ok' || state === 'unverified' ? ['name', 'owner', 'hosts', 'seq', 'root', 'quorum'] : state === 'blocked' ? ['name'] : [];
+    const labels = { name: 'Имя', owner: 'Владелец', hosts: 'Хосты', seq: 'Версия записей', root: 'Корневой ключ', quorum: 'Свидетели' };
+    const rows = keys.filter((k) => facts[k] !== undefined && facts[k] !== null && facts[k] !== '').flatMap((k) => [h('dt', {}, labels[k]), h('dd', {}, k === 'owner' || k === 'root' ? short(facts[k]) : String(facts[k]))]);
+    return [
+      h('h3', { class: s.tone }, icon(s.icon), s.title),
+      h('p', {}, state === 'error' ? detail : s.text),
+      detail && state === 'unverified' ? h('p', { class: 'why' }, detail) : null,
+      rows.length ? h('dl', { class: 'facts' }, rows) : null,
+    ];
+  }
+
+  function openAbout() {
+    let layer;
+    layer = Kit.modal({
+      title: 'О программе', width: 440, dialog: false,
+      body: [h('p', {}, 'Rift: браузер для сети, где адрес сайта проверяется подписями, а не доверием к посреднику.'), h('p', {}, 'Сайты открываются по имени вида имя.зона. Имя и владелец подтверждаются подписями от корневого ключа, а содержимое приходит напрямую от хоста.')],
+      footer: h('button', { class: 'button primary', 'data-autofocus': true, onclick: () => layer.close() }, 'Закрыть'),
+    });
+    return layer.promise;
+  }
+
+  async function refreshNotices() {
+    try {
+      const n = await invoke('sync_notices');
+      Kit.toast({ tone: 'ok', title: 'Объявления сети обновлены', text: n ? `Новых объявлений: ${n}.` : 'Новых объявлений нет.' });
+    } catch (e) { Kit.toast({ tone: 'bad', title: 'Не удалось обновить', text: String(e) }); }
+  }
+
+  async function openMenu(s) {
+    const id = await Kit.menu({
+      anchor: s.anchor, align: 'end',
+      items: [
+        { id: 'home', label: 'Стартовая страница', icon: 'home' },
+        { id: 'refresh', label: 'Обновить объявления сети', icon: 'refresh' },
+        { separator: true },
+        { id: 'history', label: 'История', icon: 'clock' },
+        { id: 'bookmarks', label: 'Закладки', icon: 'star' },
+        { separator: true },
+        { id: 'settings', label: 'Настройки', icon: 'sliders', hint: ['Cmd', ','] },
+        { id: 'about', label: 'О программе', icon: 'info' },
+      ],
+    });
+    if (id === 'home') invoke('navigate', { input: 'rift://start.rift/' });
+    else if (id === 'refresh') await refreshNotices();
+    else if (id === 'history' || id === 'bookmarks') invoke('navigate', { input: `browser://${id}` });
+    else if (id === 'settings') invoke('navigate', { input: 'browser://settings' });
+    else if (id === 'about') await openAbout();
+  }
+
+  /* Команды от приложения. Те, у которых есть `id`, ждут ответа (диалоги). */
+  async function handle(s) {
+    switch (s.kind) {
+      case 'site': return Kit.popover({ anchor: s.anchor, align: 'start', content: siteContent(s) });
+      case 'menu': return openMenu(s);
+      case 'suggest': return showSuggest(s);
+      case 'suggest-hide': return hideSuggest();
+      case 'about': return openAbout();
+      case 'toast': Kit.toast({ title: s.title, text: s.text, tone: s.tone || 'info', ms: s.ms }); return null;
+      case 'alert': return Kit.alert(s);
+      case 'confirm': return Kit.confirm(s);
+      case 'prompt': return Kit.prompt(s);
+      default: return null;
+    }
+  }
+  listen('overlay:open', async (e) => {
+    const s = e.payload;
+    if (s.kind === 'toast') hideSuggest();
+    let value;
+    try { value = await handle(s); } catch (err) { emit('overlay-state', { what: 'error', error: String(err && err.stack || err), kind: s.kind }); throw err; }
+    if (s.id) Kit.host.result(s.id, value === undefined ? null : value);
+  });
+  listen('settings', (e) => Kit.applySettings(e.payload));
+
+  (async () => {
+    Kit.caps.blur = (await invoke('get_caps')).blur;
+    Kit.applySettings(await invoke('get_settings'));
+    report('ready');
+  })();
+</script>
+</body>
+</html>

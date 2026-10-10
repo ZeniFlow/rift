@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ru" data-motion="system" data-blur="off">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Новая вкладка</title>
+<link rel="stylesheet" href="kit.css">
+<link rel="stylesheet" href="page.css">
+<style>
+  .hero { display: flex; flex-direction: column; align-items: center; padding: clamp(32px, 12vh, 120px) 16px 20px; text-align: center; }
+  .hero .mark { display: grid; place-items: center; width: 56px; height: 56px; margin-bottom: 18px; border: 1px solid var(--line); border-radius: var(--r-full); background: var(--field); color: var(--accent); }
+  .hero h1 { margin: 0 0 6px; font-size: 26px; font-weight: 600; letter-spacing: -.01em; }
+  .hero p { margin: 0; color: var(--text-2); }
+  .block { max-width: 760px; margin: 0 auto; padding: 8px clamp(16px, 4vw, 40px) 20px; }
+  .block h2 { margin: 0 0 10px 4px; font-size: 12px; font-weight: 600; color: var(--text-3); letter-spacing: .04em; text-transform: uppercase; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .tile { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 10px 14px 10px 10px; border: 1px solid var(--line); border-radius: var(--r-full); background: var(--field); color: var(--text); font: inherit; text-align: left; cursor: pointer; transition: background-color calc(120ms * var(--m)) var(--ease), border-color calc(120ms * var(--m)) var(--ease), transform calc(120ms * var(--m)) var(--ease); animation: rise calc(240ms * var(--m)) var(--ease) both; }
+  .tile:hover, .tile:focus-visible { background: var(--raised); border-color: var(--line-2); outline: 0; }
+  .tile:active { transform: scale(.98); }
+  .tile .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .links { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 22px; }
+  .tip { margin-top: 24px; color: var(--text-3); font-size: 12px; text-align: center; }
+</style>
+</head>
+<body>
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol>
+</svg>
+<svg class="sprite" aria-hidden="true" focusable="false"><symbol id="i-net" viewBox="0 0 24 24"><circle cx="12" cy="4.5" r="2.5"/><path d="m10.2 6.3-3.9 3.9"/><circle cx="4.5" cy="12" r="2.5"/><path d="M7 12h10"/><circle cx="19.5" cy="12" r="2.5"/><path d="m13.8 17.7 3.9-3.9"/><circle cx="12" cy="19.5" r="2.5"/></symbol></svg>
+<section class="hero">
+  <div class="mark"><svg class="i" style="width:24px;height:24px"><use href="#i-net"/></svg></div>
+  <h1>Rift</h1>
+  <p>Введите адрес в строке сверху: имя.зона или https://…</p>
+  <div class="links">
+    <button class="button" data-go="rift://start.rift/">Стартовая страница Rift</button>
+    <button class="button" data-go="browser://bookmarks">Закладки</button>
+    <button class="button" data-go="browser://history">История</button>
+    <button class="button" data-go="browser://settings">Настройки</button>
+  </div>
+</section>
+<div class="block" id="marks" hidden><h2>Закладки</h2><div class="tiles" id="marks-list"></div></div>
+<div class="block" id="top" hidden><h2>Часто открываете</h2><div class="tiles" id="top-list"></div></div>
+<script src="kit.js"></script>
+<script>
+  const { h, icon } = Kit;
+  const { invoke } = window.__TAURI__.core;
+  const { listen, emit } = window.__TAURI__.event;
+  const go = (input) => invoke("navigate", { input });
+  const hostOf = (u) => u.replace(/^[a-z]+:\/\//i, "").split(/[\/?#]/)[0];
+  listen("settings", (e) => Kit.applySettings(e.payload));
+  invoke("get_caps").then((c) => { Kit.caps.blur = c.blur; return invoke("get_settings"); }).then((s) => Kit.applySettings(s));
+  document.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => go(b.dataset.go)));
+  const tile = (e) => h('button', { class: 'tile', 'data-url': e.url, title: e.url, onclick: () => go(e.url) }, h('span', { class: 'dot' }, hostOf(e.url)[0] || '?'), h('span', { class: 't' }, e.title && e.title !== e.url ? e.title : hostOf(e.url)));
+  async function load() {
+    const [marks, top] = await Promise.all([invoke('bookmarks_list'), invoke('top_sites', { n: 8 })]);
+    for (const [id, list] of [['marks', marks.slice(0, 12)], ['top', top]]) {
+      document.getElementById(id).hidden = !list.length;
+      document.getElementById(id + '-list').replaceChildren(...list.map(tile));
+    }
+    emit('page-state', { page: 'newtab', ready: true, marks: marks.length, top: top.length });
+  }
+  listen('bookmarks', load); listen('history', load);
+  load();
+</script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+/* Общие стили внутренних страниц (новая вкладка, история, закладки). Токены и компоненты берутся из kit.css. */
+html, body { background: var(--bg); min-height: 100%; user-select: auto; font-size: 14px; }
+.topbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 12px; padding: 14px clamp(16px, 4vw, 40px); background: var(--bg); border-bottom: 1px solid var(--line); }
+.topbar h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -.01em; margin-right: auto; }
+.search { position: relative; flex: 1; max-width: 420px; }
+.search svg { position: absolute; left: 13px; top: 50%; translate: 0 -50%; color: var(--text-3); pointer-events: none; }
+.search input { width: 100%; height: 38px; padding: 0 14px 0 38px; border: 1px solid var(--line); border-radius: var(--r-full); background: var(--field); color: var(--text); font: inherit; transition: border-color calc(120ms * var(--m)) var(--ease), box-shadow calc(120ms * var(--m)) var(--ease); }
+.search input::placeholder { color: var(--text-3); }
+.search input:focus { outline: 0; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+.wrap { max-width: 760px; margin: 0 auto; padding: 24px clamp(16px, 4vw, 40px) 72px; }
+.day { margin: 22px 0 8px 4px; font-size: 12px; font-weight: 600; color: var(--text-3); letter-spacing: .04em; text-transform: uppercase; }
+.day:first-child { margin-top: 0; }
+.list { border: 1px solid var(--line); border-radius: var(--r-l); background: var(--field); overflow: hidden; }
+.item { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 52px; padding: 8px 8px 8px 16px; border: 0; border-top: 1px solid var(--line); background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; transition: background-color calc(120ms * var(--m)) var(--ease); animation: rise calc(220ms * var(--m)) var(--ease) both; }
+.item:first-child { border-top: 0; }
+.item:hover, .item:focus-visible { background: var(--raised); outline: 0; }
+.item .time { flex: none; width: 44px; color: var(--text-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+.item .main { flex: 1; min-width: 0; }
+.item .name, .item .addr { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item .addr { margin-top: 1px; color: var(--text-3); font-size: 12px; }
+.item .rm { flex: none; opacity: 0; }
+.item:hover .rm, .item:focus-within .rm, .item:focus-visible .rm { opacity: 1; }
+.empty { padding: 56px 0; text-align: center; color: var(--text-3); }
+.dot { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--r-full); background: var(--raised-2); color: var(--text-2); font-size: 13px; font-weight: 600; text-transform: uppercase; }
+@keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (max-width: 520px) { .topbar { flex-wrap: wrap; } .search { max-width: none; flex-basis: 100%; order: 3; } .item .time { display: none; } }

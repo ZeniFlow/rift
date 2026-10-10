@@ -136,3 +136,209 @@ pub fn traffic_lights(app: &AppHandle) -> Option<(f64, f64)> {
 pub fn traffic_lights(_: &AppHandle) -> Option<(f64, f64)> {
     None
 }
+
+// ---------------------------------------------------------------- системное размытие под слоем
+
+/// Область размытия в логических пикселях окна (начало слева сверху) и радиус углов.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Region {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+    pub r: f64,
+}
+
+/// Что видно о размытии на самом деле (для самопроверки): скрыто ли, прозрачность, рамка сверху вниз, материал.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BlurInfo {
+    pub hidden: bool,
+    pub alpha: f64,
+    pub frame: Region,
+    pub material: i64,
+}
+
+const BLUR_ID: &str = "rift-blur";
+/// `NSVisualEffectMaterial`: мягкое размытие — `Popover`, сильное — `HUDWindow`.
+pub const MATERIAL_SOFT: i64 = 6;
+pub const MATERIAL_STRONG: i64 = 13;
+
+/// Показывает или убирает размытие под слоем `overlay`. `None` — убрать (плавно, за `fade_ms`).
+#[cfg(target_os = "macos")]
+pub fn set_blur(app: &AppHandle, region: Option<Region>, material: i64, fade_ms: u64) {
+    use objc2::{
+        msg_send,
+        rc::Retained,
+        runtime::{AnyClass, AnyObject},
+    };
+    use objc2_app_kit::NSView;
+    use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+
+    let Some(overlay) = app.get_webview("overlay") else { return };
+    let _ = overlay.with_webview(move |w| unsafe {
+        let view: &NSView = &*(w.inner() as *const NSView);
+        let Some(parent) = view.superview() else { return };
+        // Найти наш вид среди соседей или создать.
+        let existing = parent.subviews().iter().find(|v| {
+            let id: Option<Retained<NSString>> = msg_send![&***v, identifier];
+            id.is_some_and(|s| s.to_string() == BLUR_ID)
+        });
+        let effect: Retained<AnyObject> = match existing {
+            Some(v) => Retained::cast_unchecked(v),
+            None => {
+                let Some(cls) = AnyClass::get(c"NSVisualEffectView") else { return };
+                let e: Retained<AnyObject> = msg_send![cls, new];
+                let _: () = msg_send![&*e, setIdentifier: &*NSString::from_str(BLUR_ID)];
+                let _: () = msg_send![&*e, setBlendingMode: 1_isize];   // withinWindow: размывает то, что лежит под ним в окне
+                let _: () = msg_send![&*e, setState: 1_isize];          // active: не тускнеет вместе с окном
+                if let Some(ap) = AnyClass::get(c"NSAppearance") {
+                    let dark: Option<Retained<AnyObject>> = msg_send![ap, appearanceNamed: &*NSString::from_str("NSAppearanceNameDarkAqua")];
+                    let _: () = msg_send![&*e, setAppearance: dark.as_deref()];
+                }
+                let _: () = msg_send![&*e, setWantsLayer: true];
+                let _: () = msg_send![&*e, setAlphaValue: 0.0_f64];
+                let below: isize = -1; // NSWindowBelow: прямо под слоем
+                let _: () = msg_send![&*parent, addSubview: &*e, positioned: below, relativeTo: view];
+                e
+            }
+        };
+
+        // Слой могли поднять над видом размытия (новая вкладка): возвращаем размытие прямо под слой.
+        let below: isize = -1;
+        let _: () = msg_send![&*parent, addSubview: &*effect, positioned: below, relativeTo: view];
+
+        let animate = |alpha: f64| {
+            if fade_ms == 0 {
+                let _: () = msg_send![&*effect, setAlphaValue: alpha];
+                return;
+            }
+            let Some(ctx_cls) = AnyClass::get(c"NSAnimationContext") else { return };
+            let _: () = msg_send![ctx_cls, beginGrouping];
+            let ctx: Retained<AnyObject> = msg_send![ctx_cls, currentContext];
+            let _: () = msg_send![&*ctx, setDuration: fade_ms as f64 / 1000.0];
+            let proxy: Retained<AnyObject> = msg_send![&*effect, animator];
+            let _: () = msg_send![&*proxy, setAlphaValue: alpha];
+            let _: () = msg_send![ctx_cls, endGrouping];
+        };
+
+        match region {
+            Some(r) => {
+                let ph = parent.frame().size.height;
+                let frame = NSRect::new(NSPoint::new(r.x, ph - r.y - r.h), NSSize::new(r.w, r.h));
+                let _: () = msg_send![&*effect, setFrame: frame];
+                let _: () = msg_send![&*effect, setMaterial: material];
+                let layer: Option<Retained<AnyObject>> = msg_send![&*effect, layer];
+                if let Some(layer) = layer {
+                    let _: () = msg_send![&*layer, setCornerRadius: r.r];
+                    let _: () = msg_send![&*layer, setMasksToBounds: true];
+                }
+                let _: () = msg_send![&*effect, setHidden: false];
+                animate(1.0);
+            }
+            None => animate(0.0),
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn set_blur(_: &AppHandle, _: Option<Region>, _: i64, _: u64) {}
+
+/// Окончательно скрывает размытие (после затухания), чтобы невидимый вид не перехватывал клики.
+#[cfg(target_os = "macos")]
+pub fn hide_blur(app: &AppHandle) {
+    use objc2::{msg_send, rc::Retained, runtime::AnyObject};
+    use objc2_app_kit::NSView;
+    use objc2_foundation::NSString;
+    let Some(overlay) = app.get_webview("overlay") else { return };
+    let _ = overlay.with_webview(|w| unsafe {
+        let view: &NSView = &*(w.inner() as *const NSView);
+        let Some(parent) = view.superview() else { return };
+        for v in parent.subviews().iter() {
+            let id: Option<Retained<NSString>> = msg_send![&*v, identifier];
+            if id.is_some_and(|s| s.to_string() == BLUR_ID) {
+                let alpha: f64 = msg_send![&*v, alphaValue];
+                if alpha < 0.05 {
+                    let o: &AnyObject = &*(Retained::as_ptr(&v) as *const AnyObject);
+                    let _: () = msg_send![o, setHidden: true];
+                }
+            }
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn hide_blur(_: &AppHandle) {}
+
+/// Для самопроверки: настоящее состояние размытия.
+#[cfg(target_os = "macos")]
+pub fn blur_info(app: &AppHandle) -> Option<BlurInfo> {
+    use objc2::{msg_send, rc::Retained};
+    use objc2_app_kit::NSView;
+    use objc2_foundation::NSString;
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.get_webview("overlay")?
+        .with_webview(move |w| unsafe {
+            let view: &NSView = &*(w.inner() as *const NSView);
+            let Some(parent) = view.superview() else { return tx.send(None).unwrap_or(()) };
+            let ph = parent.frame().size.height;
+            let found = parent.subviews().iter().find_map(|v| {
+                let id: Option<Retained<NSString>> = msg_send![&*v, identifier];
+                id.is_some_and(|s| s.to_string() == BLUR_ID).then(|| {
+                    let f = v.frame();
+                    let hidden: bool = msg_send![&*v, isHidden];
+                    let alpha: f64 = msg_send![&*v, alphaValue];
+                    let material: i64 = msg_send![&*v, material];
+                    BlurInfo { hidden, alpha, frame: Region { x: f.origin.x, y: ph - f.origin.y - f.size.height, w: f.size.width, h: f.size.height, r: 0.0 }, material }
+                })
+            });
+            tx.send(found).ok();
+        })
+        .ok()?;
+    rx.recv_timeout(std::time::Duration::from_secs(2)).ok().flatten()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn blur_info(_: &AppHandle) -> Option<BlurInfo> {
+    None
+}
+
+/// Слой `overlay` — самый верхний вид окна (иначе новая вкладка закрывает меню и окна). `None` — не удалось проверить.
+#[cfg(target_os = "macos")]
+pub fn overlay_on_top(app: &AppHandle) -> Option<bool> {
+    use objc2_app_kit::NSView;
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.get_webview("overlay")?
+        .with_webview(move |w| unsafe {
+            let view: &NSView = &*(w.inner() as *const NSView);
+            let top = view.superview().and_then(|p| p.subviews().iter().last().map(|v| std::ptr::eq(&*v as *const NSView, view as *const NSView)));
+            tx.send(top).ok();
+        })
+        .ok()?;
+    rx.recv_timeout(std::time::Duration::from_secs(2)).ok().flatten()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn overlay_on_top(_: &AppHandle) -> Option<bool> {
+    None
+}
+
+/// Скрыт ли вид WebView на самом деле (вкладка, которую не видно, не должна перекрывать активную).
+#[cfg(target_os = "macos")]
+pub fn hidden(app: &AppHandle, label: &str) -> Option<bool> {
+    use objc2::msg_send;
+    use objc2_app_kit::NSView;
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.get_webview(label)?
+        .with_webview(move |w| unsafe {
+            let view: &NSView = &*(w.inner() as *const NSView);
+            let h: bool = msg_send![view, isHidden];
+            tx.send(h).ok();
+        })
+        .ok()?;
+    rx.recv_timeout(std::time::Duration::from_secs(2)).ok()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn hidden(_: &AppHandle, _: &str) -> Option<bool> {
+    None
+}

@@ -15,12 +15,32 @@
     --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     --ease: cubic-bezier(.2, .7, .2, 1);
-    --bar-h: 44px;
+    --bar-h: 42px; --tab-h: 36px;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; background: var(--surface); color: var(--text); font: 13px/1.4 var(--font); -webkit-font-smoothing: antialiased; user-select: none; overflow: hidden; }
   svg.i { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
   .sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+
+  /* ---- вкладки: строка над адресом, в ней же кнопки окна ---- */
+  #tabs { display: flex; align-items: center; gap: 4px; height: var(--tab-h); padding: 0 10px; background: var(--surface); }
+  #tablist { display: flex; align-items: center; gap: 2px; min-width: 0; flex: 0 1 auto; }
+  .tab { position: relative; display: flex; align-items: center; gap: 8px; flex: 0 1 220px; min-width: 40px; height: 28px; padding: 0 5px 0 12px; border-radius: var(--r-full); color: var(--text-3); cursor: default; transition: background-color .12s var(--ease), color .12s var(--ease); animation: tabin .18s var(--ease) both; }
+  .tab:hover { background: var(--raised); color: var(--text-2); }
+  .tab[aria-selected="true"] { background: var(--raised-2); color: var(--text); }
+  .tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .tab .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 500; }
+  .tab .x { display: grid; place-items: center; flex: none; width: 20px; height: 20px; padding: 0; border: 0; border-radius: var(--r-full); background: transparent; color: inherit; opacity: 0; cursor: pointer; transition: opacity .12s var(--ease), background-color .12s var(--ease); }
+  .tab:hover .x, .tab[aria-selected="true"] .x, .tab:focus-within .x { opacity: 1; }
+  .tab .x:hover { background: var(--line-2); color: var(--text); }
+  .tab .x svg { width: 12px; height: 12px; }
+  .tab .spin { display: none; flex: none; width: 12px; height: 12px; border: 1.5px solid var(--line-2); border-top-color: var(--accent); border-radius: 50%; animation: turn .8s linear infinite; }
+  .tab[data-loading="true"] .spin { display: block; }
+  #newtab { width: 28px; height: 28px; flex: none; }
+  #newtab svg { width: 16px; height: 16px; }
+  #tabs-fill { flex: 1; align-self: stretch; min-width: 8px; }
+  @keyframes tabin { from { opacity: 0; transform: scale(.94); } to { opacity: 1; transform: none; } }
+  @keyframes turn { to { transform: rotate(360deg); } }
 
   /* ---- панель ---- */
   #bar { position: relative; display: flex; align-items: center; gap: 8px; height: var(--bar-h); padding: 0 10px; background: var(--surface); border-bottom: 1px solid var(--line); }
@@ -55,45 +75,34 @@
   #chip:not([hidden]) + .field #url, #chip:not([hidden]) + .field #display { padding-left: 11px; }
   #display .sch { color: var(--text-3); } #display .host { color: var(--text); font-weight: 500; } #display .path { color: var(--text-3); }
 
+  #star { width: 28px; height: 28px; margin-right: 3px; flex: none; }
+  #star[hidden] { display: none; }
+  #star[aria-pressed="true"] { color: var(--accent); }
+  #star[aria-pressed="true"] svg { fill: currentColor; }
+  #star.pop svg { animation: pop .22s var(--ease); }
+
   /* ---- индикатор загрузки ---- */
   #progress { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; overflow: hidden; opacity: 0; transition: opacity .2s var(--ease); pointer-events: none; }
   #progress.on { opacity: 1; }
   #progress::before { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 30%; background: var(--accent); transform: translateX(-100%); }
   #progress.on::before { animation: slide 1.1s linear infinite; }
 
-  /* ---- сведения о сайте ---- */
-  #panel { display: grid; grid-template-rows: 0fr; background: var(--surface); border-bottom: 1px solid var(--line); transition: grid-template-rows .2s var(--ease); }
-  #panel[hidden] { display: none; }
-  #panel.open { grid-template-rows: 1fr; }
-  #panel > div { min-height: 0; overflow: hidden; }
-  .sheet { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(280px, 1.2fr); gap: 8px 32px; padding: 16px 20px 18px; opacity: 0; transform: translateY(-4px); transition: opacity .18s var(--ease) .04s, transform .18s var(--ease) .04s; }
-  #panel.open .sheet { opacity: 1; transform: none; }
-  .sheet h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; font-size: 14px; font-weight: 600; }
-  .sheet h3 svg { width: 20px; height: 20px; }
-  .sheet p { margin: 0; color: var(--text-2); line-height: 1.5; user-select: text; }
-  .sheet .why { margin-top: 8px; color: var(--text-3); font: 12px/1.45 var(--mono); overflow-wrap: anywhere; }
-  .tone-ok { color: var(--ok); } .tone-bad { color: var(--bad); } .tone-warn { color: var(--warn); } .tone-neutral { color: var(--text-2); }
-  dl { display: grid; grid-template-columns: max-content 1fr; margin: 0; align-self: start; }
-  dt, dd { margin: 0; padding: 6px 0; border-top: 1px solid var(--line); }
-  dt { padding-right: 20px; color: var(--text-3); }
-  dd { color: var(--text); font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; user-select: text; }
-  dl > :nth-child(-n+2) { border-top: 0; }
-
   @keyframes slide { to { transform: translateX(450%); } }
   @keyframes pop { from { opacity: 0; transform: scale(.7); } to { opacity: 1; transform: none; } }
 
   /* ---- рамка окна: панель занимает место заголовка ---- */
-  html[data-frame="mac"] #bar { padding-left: 88px; }
+  html[data-frame="mac"] #tabs { padding-left: 88px; }
   #winctl { display: none; margin-left: 4px; gap: 2px; }
   html[data-frame="custom"] #winctl { display: flex; }
-  html[data-frame="custom"] #bar { padding-right: 6px; }
-  #winctl .btn { width: 36px; }
+  html[data-frame="custom"] #tabs { padding-right: 0; }
+  html[data-frame="custom"] #winctl { margin-left: 0; }
+  #winctl .btn { width: 46px; height: var(--tab-h); border-radius: 0; }
   #winctl .close:hover { background: var(--bad); color: #fff; }
   #winctl .restore { display: none; } #winctl[data-max="true"] .restore { display: block; } #winctl[data-max="true"] .maximize { display: none; }
 
   /* ---- адаптивность ---- */
-  @media (max-width: 760px) { #chip .label { display: none; } #chip { padding: 0 9px; } .sheet { grid-template-columns: 1fr; padding: 14px 16px 16px; } }
-  @media (max-width: 480px) { #fwd { display: none; } #bar { gap: 6px; padding: 0 8px; } }
+  @media (max-width: 760px) { #chip .label { display: none; } #chip { padding: 0 9px; } }
+  @media (max-width: 480px) { #fwd, #star { display: none; } #bar { gap: 6px; padding: 0 8px; } }
   @media (max-width: 340px) { #reload { display: none; } }
   @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 </style>
@@ -107,12 +116,26 @@
   <symbol id="i-unverified" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="M12 8v4"/><path d="M12 16h.01"/></symbol>
   <symbol id="i-blocked" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></symbol>
   <symbol id="i-web" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></symbol>
   <symbol id="i-min" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
   <symbol id="i-max" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/></symbol>
   <symbol id="i-restore" viewBox="0 0 24 24"><path d="M8 8V6.5A1.5 1.5 0 0 1 9.5 5h8A1.5 1.5 0 0 1 19 6.5v8a1.5 1.5 0 0 1-1.5 1.5H16"/><rect x="5" y="8" width="11" height="11" rx="1.5"/></symbol>
   <symbol id="i-close" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
   <symbol id="i-error" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
 </svg>
+
+<div id="tabs" data-tauri-drag-region>
+  <div id="tablist" role="tablist" aria-label="Вкладки"></div>
+  <button class="btn" id="newtab" title="Новая вкладка" aria-label="Новая вкладка"><svg class="i"><use href="#i-plus"/></svg></button>
+  <div id="tabs-fill" data-tauri-drag-region></div>
+  <div id="winctl" role="group" aria-label="Окно">
+    <button class="btn" id="wc-min" title="Свернуть" aria-label="Свернуть"><svg class="i"><use href="#i-min"/></svg></button>
+    <button class="btn" id="wc-max" title="Развернуть" aria-label="Развернуть"><svg class="i maximize"><use href="#i-max"/></svg><svg class="i restore"><use href="#i-restore"/></svg></button>
+    <button class="btn close" id="wc-close" title="Закрыть" aria-label="Закрыть"><svg class="i"><use href="#i-close"/></svg></button>
+  </div>
+</div>
 
 <header id="bar" role="toolbar" aria-label="Навигация" data-tauri-drag-region>
   <div class="nav">
@@ -121,38 +144,24 @@
     <button class="btn" id="reload" title="Обновить" aria-label="Обновить"><svg class="i"><use href="#i-reload"/></svg></button>
   </div>
   <form id="addr" autocomplete="off">
-    <button type="button" id="chip" hidden aria-haspopup="true" aria-expanded="false" aria-controls="panel" data-state="idle">
+    <button type="button" id="chip" hidden aria-haspopup="dialog" aria-expanded="false" data-state="idle">
       <svg class="i"><use href="#i-ok"/></svg><span class="label"></span>
     </button>
     <div class="field">
       <input id="url" type="text" spellcheck="false" autocapitalize="off" autocorrect="off" placeholder="Введите адрес: имя.зона или https://…" aria-label="Адрес">
       <div id="display" aria-hidden="true"></div>
     </div>
+    <button type="button" class="btn" id="star" hidden title="Добавить в закладки" aria-label="Добавить в закладки" aria-pressed="false"><svg class="i"><use href="#i-star"/></svg></button>
   </form>
-  <div id="winctl" role="group" aria-label="Окно">
-    <button class="btn" id="wc-min" title="Свернуть" aria-label="Свернуть"><svg class="i"><use href="#i-min"/></svg></button>
-    <button class="btn" id="wc-max" title="Развернуть" aria-label="Развернуть"><svg class="i maximize"><use href="#i-max"/></svg><svg class="i restore"><use href="#i-restore"/></svg></button>
-    <button class="btn close" id="wc-close" title="Закрыть" aria-label="Закрыть"><svg class="i"><use href="#i-close"/></svg></button>
-  </div>
+  <button class="btn" id="menu" title="Меню" aria-label="Меню" aria-haspopup="menu" aria-expanded="false"><svg class="i"><use href="#i-more"/></svg></button>
   <div id="progress" role="progressbar" aria-label="Загрузка"></div>
 </header>
-
-<section id="panel" hidden aria-label="Сведения о сайте">
-  <div><div class="sheet">
-    <div>
-      <h3 id="p-title"></h3>
-      <p id="p-text"></p>
-      <p class="why" id="p-why" hidden></p>
-    </div>
-    <dl id="p-facts"></dl>
-  </div></div>
-</section>
 
 <script>
   const { invoke } = window.__TAURI__.core;
   const { listen, emit } = window.__TAURI__.event;
   const $ = (id) => document.getElementById(id);
-  const url = $('url'), display = $('display'), chip = $('chip'), panel = $('panel'), progress = $('progress'), sheet = panel.querySelector('.sheet');
+  const url = $('url'), display = $('display'), chip = $('chip'), menu = $('menu'), progress = $('progress');
 
   /* Рамка окна задаётся приложением: mac — родные кнопки, custom — свои (Windows), native — системная. */
   const frame = window.__RIFT_FRAME__ || 'native';
@@ -165,6 +174,62 @@
     const syncMax = async () => { const m = await win.isMaximized(); $('winctl').dataset.max = m; $('wc-max').title = m ? 'Восстановить' : 'Развернуть'; $('wc-max').setAttribute('aria-label', $('wc-max').title); };
     win.onResized(syncMax); syncMax();
   }
+
+  /* ---- вкладки ---- */
+  let tabs = [], activeId = 0;
+  const tabEls = new Map();
+  const tabTitle = (t) => t.title || (t.shown ? t.shown.replace(/^[a-z]+:\/\//i, '') : 'Новая вкладка');
+  function renderTabs({ tabs: list, active }) {
+    tabs = list; activeId = active;
+    const strip = $('tablist');
+    for (const [id, el] of tabEls) if (!list.some((t) => t.id === id)) { el.remove(); tabEls.delete(id); }
+    list.forEach((t, i) => {
+      let el = tabEls.get(t.id);
+      if (!el) {
+        el = document.createElement('div');
+        el.className = 'tab'; el.setAttribute('role', 'tab'); el.tabIndex = 0;
+        el.innerHTML = '<span class="spin"></span><span class="t"></span><button class="x" tabindex="-1"><svg class="i"><use href="#i-close"/></svg></button>';
+        el.addEventListener('click', () => invoke('tab_switch', { id: t.id }));
+        el.addEventListener('auxclick', (e) => { if (e.button === 1) invoke('tab_close', { id: t.id }); });
+        el.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); invoke('tab_switch', { id: t.id }); } });
+        el.querySelector('.x').addEventListener('click', (e) => { e.stopPropagation(); invoke('tab_close', { id: t.id }); });
+        tabEls.set(t.id, el);
+      }
+      if (strip.children[i] !== el) strip.insertBefore(el, strip.children[i] || null);
+      el.dataset.id = t.id; el.dataset.loading = t.loading;
+      el.setAttribute('aria-selected', String(t.id === active));
+      const name = tabTitle(t);
+      el.querySelector('.t').textContent = name; el.title = name;
+      el.querySelector('.x').title = el.querySelector('.x').ariaLabel = `Закрыть вкладку «${name}»`;
+    });
+    report('tabs');
+  }
+  async function newTab() { await invoke('tab_new'); renderAddress(''); url.focus(); }
+  listen('tabs', (e) => renderTabs(e.payload));
+  $('newtab').addEventListener('click', newTab);
+
+  /* ---- закладка на открытую страницу ---- */
+  const star = $('star');
+  let here = '';
+  async function refreshStar() {
+    const ok = here && !here.startsWith('browser://');
+    star.hidden = !ok;
+    if (!ok) return;
+    const on = await invoke('bookmark_state', { url: here });
+    star.setAttribute('aria-pressed', String(on));
+    star.title = star.ariaLabel = on ? 'Убрать из закладок' : 'Добавить в закладки';
+    report('star');
+  }
+  async function toggleStar() {
+    if (star.hidden) { invoke('overlay_open', { spec: { kind: 'toast', tone: 'info', title: 'Эту страницу нельзя добавить в закладки' } }); return; }
+    try {
+      const on = await invoke('bookmark_toggle');
+      star.classList.remove('pop'); void star.offsetWidth; star.classList.add('pop');
+      invoke('overlay_open', { spec: { kind: 'toast', tone: 'ok', title: on ? 'Добавлено в закладки' : 'Убрано из закладок' } });
+    } catch (e) { invoke('overlay_open', { spec: { kind: 'toast', tone: 'bad', title: 'Не удалось', text: String(e) } }); }
+  }
+  star.addEventListener('click', toggleStar);
+  listen('bookmarks', refreshStar);
 
   /* Состояния чипа: значок, подпись и тон. Эмодзи не используем: только SVG из спрайта. */
   const STATES = {
@@ -194,77 +259,84 @@
     state = next; facts = data; detail = why;
     const s = STATES[next];
     chip.hidden = !s;
-    if (!s) { closePanel(); return; }
+    if (!s) return;
     chip.dataset.state = next;
     chip.querySelector('use').setAttribute('href', `#i-${s.icon}`);
     chip.querySelector('.label').textContent = s.label;
     chip.title = s.title; chip.setAttribute('aria-label', s.title);
     if (changed) { chip.classList.remove('pop'); void chip.offsetWidth; chip.classList.add('pop'); }
-    if (!panel.hidden) fillPanel();
   }
 
-  function fillPanel() {
-    const s = STATES[state]; if (!s) return;
-    const text = {
-      ok: 'Имя и владелец подтверждены подписями от корневого ключа Rift. Содержимое приходит напрямую от хоста сайта и передаётся в зашифрованном виде.',
-      blocked: 'Оператор сети закрыл доступ к этому имени. Решение подписано и опубликовано, поэтому действует на всех устройствах.',
-      unverified: 'Цепочку подписей для этого имени подтвердить не удалось, поэтому сайт показан без гарантий.',
-      web: 'Соединение идёт через интернет, мимо сети Rift. Подписи Rift владельца этого сайта не проверяют.',
-      error: detail,
-    }[state];
-    const h = $('p-title'); h.className = `tone-${s.tone}`;
-    h.innerHTML = `<svg class="i"><use href="#i-${s.icon}"/></svg>`; h.append(document.createTextNode(s.title));
-    $('p-text').textContent = text;
-    const why = $('p-why'); why.hidden = !(detail && state === 'unverified'); why.textContent = detail;
-    const keys = state === 'ok' || state === 'unverified' ? ['name', 'owner', 'hosts', 'seq', 'root', 'quorum'] : state === 'blocked' ? ['name'] : [];
-    const labels = { name: 'Имя', owner: 'Владелец', hosts: 'Хосты', seq: 'Версия записей', root: 'Корневой ключ', quorum: 'Свидетели' };
-    const rows = keys.filter((k) => facts[k] !== undefined && facts[k] !== null && facts[k] !== '')
-      .map((k) => [labels[k], k === 'owner' || k === 'root' ? short(facts[k]) : facts[k]]);
-    const dl = $('p-facts'); dl.textContent = '';
-    for (const [k, v] of rows) { const dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = k; dd.textContent = v; dl.append(dt, dd); }
-  }
+  /* Сведения о сайте и меню рисует слой `overlay` (см. overlay.html): он лежит поверх страницы сайта. */
+  let layers = 0;
+  const anchor = (el) => { const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height }; };
+  const openSite = () => invoke('overlay_open', { spec: { kind: 'site', anchor: anchor(chip), state, facts, detail } });
+  const openMenu = () => invoke('overlay_open', { spec: { kind: 'menu', anchor: anchor(menu) } });
+  listen('overlay-state', (e) => { layers = e.payload.layers; for (const b of [chip, menu]) b.setAttribute('aria-expanded', 'false'); report('panel'); });
 
-  /* Панель сведений раздвигает окно: страница сайта — отдельный WebView и под нашу вёрстку не заходит. */
-  let panelTimer;
-  async function openPanel() {
-    clearTimeout(panelTimer); panel.hidden = false; fillPanel();
-    const height = sheet.scrollHeight + 1;
-    await invoke('set_panel', { height });
-    requestAnimationFrame(() => { panel.classList.add('open'); chip.setAttribute('aria-expanded', 'true'); report('panel'); });
+  /* ---- подсказки под адресом: список рисует слой `overlay`, ввод остаётся здесь ---- */
+  let sug = { items: [], sel: -1 };
+  const drawSug = () => { invoke('overlay_open', { spec: { kind: 'suggest', anchor: anchor($('addr')), items: sug.items, sel: sug.sel } }); report('sug'); };
+  function hideSug() {
+    if (!sug.items.length) return;
+    sug = { items: [], sel: -1 };
+    invoke('overlay_open', { spec: { kind: 'suggest-hide' } }); report('sug');
   }
-  function closePanel() {
-    if (panel.hidden) return;
-    panel.classList.remove('open'); chip.setAttribute('aria-expanded', 'false');
-    clearTimeout(panelTimer);
-    panelTimer = setTimeout(() => { panel.hidden = true; invoke('set_panel', { height: 0 }); report('panel'); }, 220);
+  let sugSeq = 0;
+  async function suggest() {
+    const q = url.value.trim(), n = ++sugSeq;
+    if (!q) return hideSug();
+    const items = await invoke('suggest', { query: q });
+    if (n !== sugSeq || document.activeElement !== url) return;   // пока считали, ввод ушёл вперёд
+    if (!items.length) return hideSug();
+    sug = { items, sel: -1 }; drawSug();
   }
-  /* Ширина окна меняет раскладку панели (1 или 2 колонки), а с ней и нужную высоту. */
-  new ResizeObserver(() => { if (panel.classList.contains('open')) invoke('set_panel', { height: sheet.scrollHeight + 1 }); }).observe(sheet);
-  chip.addEventListener('click', () => (panel.hidden || !panel.classList.contains('open') ? openPanel() : closePanel()));
+  listen('suggest-pick', (e) => go(e.payload.url));
+  url.addEventListener('input', suggest);
+  url.addEventListener('blur', () => setTimeout(hideSug, 120));
+  url.addEventListener('keydown', (e) => {
+    if (!sug.items.length || (e.key !== 'ArrowDown' && e.key !== 'ArrowUp')) return;
+    e.preventDefault();
+    const n = sug.items.length, d = e.key === 'ArrowDown' ? 1 : -1;
+    sug.sel = ((sug.sel + 1 + d + n + 1) % (n + 1)) - 1;   // -1 — ничего не выбрано: Enter откроет набранное
+    drawSug();
+  });
 
   function loading(on) { progress.classList.toggle('on', on); url.parentElement.parentElement.setAttribute('aria-busy', on); }
 
   async function go(input) {
-    closePanel(); loading(true);
+    hideSug(); sugSeq++;
+    loading(true);
     try { renderAddress(await invoke('navigate', { input })); url.blur(); }
-    catch (e) { loading(false); setState('error', {}, String(e)); openPanel(); }
+    catch (e) { loading(false); setState('error', {}, String(e)); openSite(); }
   }
 
-  $('addr').addEventListener('submit', (e) => { e.preventDefault(); const v = url.value.trim(); if (v) go(v); });
+  $('addr').addEventListener('submit', (e) => { e.preventDefault(); const v = sug.sel >= 0 ? sug.items[sug.sel].url : url.value.trim(); if (v) go(v); });
   url.addEventListener('focus', () => url.select());
+  chip.addEventListener('click', () => { chip.setAttribute('aria-expanded', 'true'); openSite(); });
+  menu.addEventListener('click', () => { menu.setAttribute('aria-expanded', 'true'); openMenu(); });
   $('back').addEventListener('click', () => invoke('history', { delta: -1 }));
   $('fwd').addEventListener('click', () => invoke('history', { delta: 1 }));
   $('reload').addEventListener('click', (e) => { const b = e.currentTarget; b.classList.remove('spin'); void b.offsetWidth; b.classList.add('spin'); invoke('reload'); });
+  /* Действия вызываются из меню macOS (событие `menu`) и сочетаниями клавиш на остальных системах. */
+  const ACTIONS = {
+    'tab-new': newTab, 'tab-close': () => invoke('tab_close', { id: activeId }), addr: () => url.focus(), reload: () => $('reload').click(),
+    settings: () => go('browser://settings'), history: () => go('browser://history'), bookmark: toggleStar,
+    back: () => $('back').click(), forward: () => $('fwd').click(),
+  };
+  listen('menu', (e) => ACTIONS[e.payload]?.());
+  const KEYS = { t: 'tab-new', w: 'tab-close', l: 'addr', r: 'reload', ',': 'settings', h: 'history', d: 'bookmark' };
   document.addEventListener('keydown', (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'l') { e.preventDefault(); url.focus(); }
-    else if (e.key === 'Escape') { if (!panel.hidden) closePanel(); else url.blur(); }
+    if (frame !== 'mac' && (e.metaKey || e.ctrlKey) && KEYS[e.key.toLowerCase()]) { e.preventDefault(); ACTIONS[KEYS[e.key.toLowerCase()]](); }
+    else if (frame !== 'mac' && e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { e.preventDefault(); ACTIONS[e.key === 'ArrowLeft' ? 'back' : 'forward'](); }
+    else if (e.key === 'Escape') { if (sug.items.length) hideSug(); else url.blur(); }
   });
 
   /* Адрес всегда в виде rift://, даже если страница открыта через шлюз. */
-  listen('location', (e) => { if (document.activeElement !== url) renderAddress(e.payload); });
+  listen('location', (e) => { here = e.payload; refreshStar(); if (document.activeElement !== url) renderAddress(e.payload); });
   listen('loading', (e) => loading(!!e.payload));
   listen('status', (e) => {
-    const s = e.payload; loading(false);
+    const s = e.payload;
     if (s.ok) setState('ok', s);
     else if (s.rift === false) setState(s.web ? 'web' : 'idle');
     else if (s.blocked) setState('blocked', s);
@@ -272,9 +344,10 @@
   });
 
   /* Наблюдаемое состояние панели: по нему приложение проверяет себя (`rift-app selftest-ui`). */
-  function report(what) { emit('ui-state', { what, frame, backLeft: $('back').getBoundingClientRect().left, url: url.value, state, panel: !panel.hidden && panel.classList.contains('open'), label: chip.hidden ? '' : STATES[state].label, detail }); }
+  function report(what) { emit('ui-state', { what, frame, tabsLeft: $('tablist').getBoundingClientRect().left, tabs: tabs.map((t) => ({ id: t.id, title: t.title, shown: t.shown })), active: activeId, starred: star.getAttribute('aria-pressed') === 'true', starHidden: star.hidden, focused: document.activeElement === url, sug: sug.items.length, sel: sug.sel, url: url.value, state, panel: layers > 0, label: chip.hidden ? '' : STATES[state].label, detail }); }
   for (const t of ['location', 'status']) listen(t, () => setTimeout(() => report(t), 0));
   for (const id of ['back', 'fwd', 'reload']) $(id).addEventListener('click', () => report(id));
+  invoke('tabs_state');
   report('ready');
 </script>
 </body>
