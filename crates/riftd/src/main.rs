@@ -6,7 +6,33 @@ use librift::bridge::BridgeUrl;
 use librift::host::{HTTP_ALPN, Host};
 use librift::names::{self, NAMES_ALPN, Request, Resolver};
 use librift::{Config, EndpointAddr, Handler, Node, NodeId, RelayUrl, SecretKey, TransportAddr, Url, load_or_create_key, vpn};
-use rift_trust::{Announcement, Bundle, PublicKey};
+use rift_trust::{Announcement, Bundle, PublicKey, Trust};
+
+/// Кому верит клиент: root и свидетели логов. В приложении это вшито, здесь — флаги для разработки.
+#[derive(clap::Args, Clone)]
+struct TrustArgs {
+    /// Публичный ключ root.
+    #[arg(long, env = "RIFT_ROOT")]
+    root: PublicKey,
+    /// Свидетель логов (можно несколько).
+    #[arg(long = "witness", env = "RIFT_WITNESSES", value_delimiter = ',')]
+    witnesses: Vec<PublicKey>,
+    /// Сколько свидетелей должны подписать голову лога. 0 — не требовать (только отладка).
+    #[arg(long, default_value_t = 1, env = "RIFT_WITNESS_THRESHOLD")]
+    threshold: usize,
+}
+
+impl TrustArgs {
+    fn get(&self) -> Result<Trust> {
+        anyhow::ensure!(
+            self.threshold <= self.witnesses.len(),
+            "порог {} больше числа свидетелей ({}): укажи --witness или --threshold 0",
+            self.threshold,
+            self.witnesses.len()
+        );
+        Ok(Trust { root: self.root, witnesses: self.witnesses.clone(), threshold: self.threshold })
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "riftd", version, about = "Нода сети Rift")]
@@ -70,14 +96,13 @@ enum Cmd {
     },
     /// Резолвер имён: недоверенный кэш цепочек (доверие — в подписях, нужен только root).
     Resolver {
-        /// Публичный ключ root (вшит в приложение; здесь — для разработки).
-        #[arg(long, env = "RIFT_ROOT")]
-        root: PublicKey,
+        #[command(flatten)]
+        trust: TrustArgs,
     },
     /// Опубликовать сайт: цепочка домена + туннель до локального приложения.
     Host {
-        #[arg(long, env = "RIFT_ROOT")]
-        root: PublicKey,
+        #[command(flatten)]
+        trust: TrustArgs,
         /// bundle.json от `rift-ca bundle`.
         #[arg(long)]
         bundle: PathBuf,
@@ -100,8 +125,8 @@ enum Cmd {
     /// Открыть rift://имя.зона/путь и вывести ответ (как curl).
     Get {
         url: String,
-        #[arg(long, env = "RIFT_ROOT")]
-        root: PublicKey,
+        #[command(flatten)]
+        trust: TrustArgs,
         #[arg(long = "resolver", env = "RIFT_RESOLVERS", value_delimiter = ',', required = true)]
         resolvers: Vec<String>,
     },
@@ -136,7 +161,7 @@ async fn main() -> Result<()> {
     let default_relay = cli.relays.first().cloned();
     let relay_mode = Config::relay_mode(cli.relays);
     let extra: Vec<(Vec<u8>, Handler)> = match &cli.cmd {
-        Cmd::Resolver { root } => vec![(NAMES_ALPN.to_vec(), Box::new(Resolver::new(*root)))],
+        Cmd::Resolver { trust } => vec![(NAMES_ALPN.to_vec(), Box::new(Resolver::new(trust.get()?)))],
         Cmd::Host { upstream, .. } => vec![(HTTP_ALPN.to_vec(), Box::new(Host::new(upstream.as_str())))],
         _ => vec![],
     };
@@ -170,9 +195,10 @@ async fn main() -> Result<()> {
             println!("Резолвер: {}{relay}\n\nCtrl-C — выход.", node.id());
             tokio::signal::ctrl_c().await?;
         }
-        Cmd::Host { root, bundle, resolvers, upstream } => {
+        Cmd::Host { trust, bundle, resolvers, upstream } => {
+            let trust = trust.get()?;
             let bundle: Bundle = read_json(&bundle)?;
-            let name = rift_trust::verify(&root, &bundle, &[], names::now())
+            let name = rift_trust::verify(&trust, &bundle, &[], names::now())
                 .context("цепочка не проходит проверку")
                 .and_then(|r| {
                     anyhow::ensure!(r.hosts.contains(&node.id()), "в записях {} нет NodeID этой ноды ({}): перевыпусти dns с --host {}", r.name, node.id(), node.id());
@@ -202,11 +228,12 @@ async fn main() -> Result<()> {
                 println!("{}: принято {n}/{}", p.display(), resolvers.len());
             }
         }
-        Cmd::Get { url, root, resolvers } => {
+        Cmd::Get { url, trust, resolvers } => {
+            let trust = trust.get()?;
             let rest = url.strip_prefix("rift://").context("ожидался rift://имя.зона/путь")?;
             let (name, path) = rest.split_once('/').map_or((rest, "/".to_string()), |(n, p)| (n, format!("/{p}")));
             let resolvers = parse_peers(&resolvers, &default_relay)?;
-            let r = names::resolve(node.endpoint(), &resolvers, &root, name).await?;
+            let r = names::resolve(node.endpoint(), &resolvers, &trust, name).await?;
             let request = librift::host::get_request(name, &path);
             let mut last = None;
             for h in &r.hosts {
