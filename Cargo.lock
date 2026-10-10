@@ -1969,17 +1969,25 @@ version = "0.0.1"
 dependencies = [
  "anyhow",
  "bytes",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "iroh",
  "iroh-mdns-address-lookup",
+ "rcgen",
  "rift-reality",
  "rift-trust",
+ "rustls",
  "rustls-pki-types",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-rustls",
+ "tokio-stream",
  "tracing",
  "tun-rs",
  "url",
+ "webpki-roots",
 ]
 
 [[package]]

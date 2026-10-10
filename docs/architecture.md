@@ -123,7 +123,14 @@ rift host shop.brand --upstream http://localhost:3000
 rift host api.shop.brand --upstream https://localhost:8443 --upstream-insecure  # self-signed
 ```
 
-**Сделано (фаза 3):** `riftd host` — прозрачный TCP-туннель до `--upstream host:port`, поэтому HTTP/1.1, WebSocket и SSE проходят как есть. Пока нет: upstream по https, переписывания `Host`, заголовка `Rift-Client-Id` (всё это требует разбора HTTP — следующий шаг, на hyper).
+**Сделано (фаза 3):** `riftd host` — потоковый HTTP/1.1-прокси на hyper (`librift::host`):
+- `--upstream` принимает `host:port`, `http://…` и `https://…`; `--upstream-insecure` не проверяет сертификат (self-signed на localhost);
+- SSE и большие тела не буферизуются, `Upgrade` (WebSocket) проходит в обе стороны — оба случая покрыты тестами;
+- `Rift-Client-Id` всегда перезаписывается настоящим NodeID клиента (подделать нельзя), `Host` = адрес upstream (иначе Vite/Next отвечают «host not allowed»), исходный — в `X-Forwarded-Host`, `X-Forwarded-Proto: https`; пришедшие от клиента `Forwarded` и `X-Forwarded-For` отбрасываются;
+- недоступный upstream → 502 с пояснением;
+- `--static DIR` (`rift deploy`) отдаёт собранный сайт: неизвестный путь без расширения → `index.html` (SPA), несуществующий файл → 404, выход из папки (`..`, `%2e%2e`, симлинки) закрыт, методы кроме GET/HEAD → 405.
+
+Пока нет: `Range` и сжатия в статике (файл читается целиком), HTTP/2 к upstream, переписывания `Location` и cookie.
 
 Проходит насквозь: HTTP/1.1 и HTTP/2, стриминг, большие загрузки, **WebSocket и SSE**. Заголовки: `Host` переписывается под upstream, `Forwarded`, плюс **`Rift-Client-Id: <NodeID>`** — проверенный ключ клиента → авторизация без паролей.
 
@@ -186,7 +193,7 @@ librift (Rust, на базе iroh)
 | 0 | librift: ключи, QUIC, relay, hole punch, `riftd`, трейты транспорта/линка | две ноды за разными NAT пингуют друг друга | ✅ e2e: ноды за NAT, пробитие при лёгком NAT у одной стороны; ⏳ реальные серверы |
 | 1 | Mesh-VPN + LAN-relay | `ssh` на ноут за NAT с телефона по мобильному интернету | ✅ e2e: ping6 + TCP через TUN, через relay и напрямую |
 | 2 | Транспорты T2–T5 + автоподбор, мосты | подключение с российского мобильного интернета | 🟡 `--proxy` + внешний REALITY; дальше встроенный REALITY, перебор входов |
-| 3 | Доверие + имена + `rift host` / `rift deploy` + `control.rift` | `rift://test.brand` с Node.js-бэкендом открывается при выключенной control | 🟡 цепочка, **transparency-логи + свидетели**, резолвер, `host` (TCP-туннель), `get` — работают, проверено вживую. Нет: сетевой сервер логов, `rift deploy`, `control.rift`, заголовки |
+| 3 | Доверие + имена + `rift host` / `rift deploy` + `control.rift` | `rift://test.brand` с Node.js-бэкендом открывается при выключенной control | 🟡 цепочка, transparency-логи + свидетели, резолвер, `host` (HTTP-прокси, `--static`), `get` — работают, проверено вживую с Node.js. Нет: сетевой сервер логов, `control.rift` |
 | 4 | rift-app (Tauri): браузер + VPN | — | — |
 | 5 | Кошелёк TON, RIFT, оплата зон/доменов, стейк | купил зону `.brand`, продал в ней домен | — |
 | 6 | Exit + платёжные каналы | заплатил → интернет через exit | — |

@@ -250,7 +250,7 @@ mod tests {
     #[tokio::test]
     async fn site_opens_while_control_is_offline() {
         let (root, control, zone, owner) = (SecretKey::generate(), SecretKey::generate(), SecretKey::generate(), SecretKey::generate());
-        let host = node(vec![(HTTP_ALPN.to_vec(), Box::new(Host::new(app().await)))]).await;
+        let host = node(vec![(HTTP_ALPN.to_vec(), Box::new(Host::proxy(&app().await, false).unwrap()))]).await;
         let b = bundle(&root, &control, &zone, &owner, host.id(), 1);
         // Control выключен: его ключа больше нет, дальше работают только подписи в цепочке.
         drop((control, zone));

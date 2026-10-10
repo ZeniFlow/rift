@@ -106,9 +106,15 @@ enum Cmd {
         /// bundle.json от `rift-ca bundle`.
         #[arg(long)]
         bundle: PathBuf,
-        /// Локальное приложение (Node.js, nginx…), host:port.
+        /// Локальное приложение (Node.js, nginx…): host:port, http://… или https://….
+        #[arg(long, conflicts_with = "static_dir", required_unless_present = "static_dir")]
+        upstream: Option<String>,
+        /// Не проверять сертификат upstream (self-signed на localhost).
         #[arg(long)]
-        upstream: String,
+        upstream_insecure: bool,
+        /// Вместо приложения отдавать собранный сайт из папки (React, Vue…): `rift deploy`.
+        #[arg(long = "static", value_name = "DIR")]
+        static_dir: Option<PathBuf>,
         #[arg(long = "resolver", env = "RIFT_RESOLVERS", value_delimiter = ',', required = true)]
         resolvers: Vec<String>,
     },
@@ -162,7 +168,8 @@ async fn main() -> Result<()> {
     let relay_mode = Config::relay_mode(cli.relays);
     let extra: Vec<(Vec<u8>, Handler)> = match &cli.cmd {
         Cmd::Resolver { trust } => vec![(NAMES_ALPN.to_vec(), Box::new(Resolver::new(trust.get()?)))],
-        Cmd::Host { upstream, .. } => vec![(HTTP_ALPN.to_vec(), Box::new(Host::new(upstream.as_str())))],
+        Cmd::Host { upstream: Some(u), upstream_insecure, .. } => vec![(HTTP_ALPN.to_vec(), Box::new(Host::proxy(u, *upstream_insecure)?))],
+        Cmd::Host { static_dir: Some(d), .. } => vec![(HTTP_ALPN.to_vec(), Box::new(Host::static_dir(d)?))],
         _ => vec![],
     };
 
@@ -195,7 +202,7 @@ async fn main() -> Result<()> {
             println!("Резолвер: {}{relay}\n\nCtrl-C — выход.", node.id());
             tokio::signal::ctrl_c().await?;
         }
-        Cmd::Host { trust, bundle, resolvers, upstream } => {
+        Cmd::Host { trust, bundle, resolvers, upstream, static_dir, .. } => {
             let trust = trust.get()?;
             let bundle: Bundle = read_json(&bundle)?;
             let name = rift_trust::verify(&trust, &bundle, &[], names::now())
@@ -205,7 +212,8 @@ async fn main() -> Result<()> {
                     Ok(r.name)
                 })?;
             let resolvers = parse_peers(&resolvers, &default_relay)?;
-            println!("rift://{name} → {upstream} (NodeID {})\nCtrl-C — выход.", node.id());
+            let target = upstream.or(static_dir.map(|d| d.display().to_string())).unwrap_or_default();
+            println!("rift://{name} → {target} (NodeID {})\nCtrl-C — выход.", node.id());
             let mut tick = tokio::time::interval(Duration::from_secs(300));
             loop {
                 tokio::select! {

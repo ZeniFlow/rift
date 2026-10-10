@@ -10,7 +10,7 @@
 - Фаза 0: ключ ноды, соединение по NodeID через relay с переходом на прямое (hole punching), `riftd ping`. Проверено в e2e: ноды за разными NAT.
 - Фаза 1: mesh-VPN `riftd vpn`. Устройства за NAT видят друг друга по IPv6 `fd72:…`, ноды в LAN находят друг друга через mDNS. Проверено в e2e: ping6 и TCP через туннель.
 - Фаза 2 (начата): `--proxy` — трафик к relay через маскирующий транспорт, см. [docs/bridge.md](docs/bridge.md).
-- Фаза 3 (идёт): доверие и имена. `rift-trust` (цепочка root → control → зона → регистратор → домен, проверка оффлайн), `rift-ca` (оффлайн-выпуск), `riftd resolver / host / publish / get`. Сайт открывается при выключенном control.
+- Фаза 3 (идёт): доверие и имена. `rift-trust` (цепочка root → control → зона → регистратор → домен, проверка оффлайн), `rift-ca` (оффлайн-выпуск), `riftd resolver / host / publish / get`, transparency-логи со свидетелями, HTTP-прокси и статика. Сайт открывается при выключенном control.
 
 ## Сборка
 
@@ -102,10 +102,14 @@ rift-ca verify --root $ROOT --witness $W1 --witness $W2 --threshold 2 --bundle b
 ```bash
 T="--root $ROOT --witness $W1 --witness $W2 --threshold 2"
 riftd --relay $RELAY resolver $T                                        # печатает NodeID@relay
-riftd --relay $RELAY host $T --bundle bundle.json --upstream 127.0.0.1:3000 --resolver $RESOLVER
+riftd --relay $RELAY host $T --bundle bundle.json --upstream http://127.0.0.1:3000 --resolver $RESOLVER   # Node.js, nginx…
+riftd --relay $RELAY host $T --bundle bundle.json --static ./dist --resolver $RESOLVER                      # собранный React/Vue (SPA)
 riftd --relay $RELAY get rift://shop.brand/ $T --resolver $RESOLVER
 rift-ca notice --key root.key --freeze shop.brand -o freeze.json        # takedown (control: + --control-cert control.json)
 riftd --relay $RELAY publish --resolver $RESOLVER --notice freeze.json
 ```
+
+Приложение видит заголовок `Rift-Client-Id` с проверенным NodeID клиента (это готовая авторизация без паролей),
+`Host` = адрес upstream, исходное имя — в `X-Forwarded-Host`. WebSocket и SSE работают.
 
 `--threshold 0` отключает проверку свидетелей (только для отладки: защиты от выпуска задним числом нет).
