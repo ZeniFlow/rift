@@ -1,0 +1,29 @@
+# a и b в разных сетях: друг друга напрямую не видят, только через relay.
+x-node: &node
+  image: rift-e2e
+  build: { context: ../.., dockerfile: tests/e2e/Dockerfile }
+  cap_add: [NET_ADMIN]
+  devices: [/dev/net/tun]
+  sysctls: { net.ipv6.conf.all.disable_ipv6: 0 }
+  volumes: [shared:/shared]
+
+services:
+  relay:
+    image: rift-e2e
+    build: { context: ../.., dockerfile: tests/e2e/Dockerfile }
+    command: iroh-relay --dev
+    networks: [net_a, net_b]
+  a:
+    <<: *node
+    command: sh /e2e/node.sh a b
+    networks: [net_a]
+  b:
+    <<: *node
+    command: sh /e2e/node.sh b a
+    networks: [net_b]
+
+networks:
+  net_a: {}
+  net_b: {}
+volumes:
+  shared: {}

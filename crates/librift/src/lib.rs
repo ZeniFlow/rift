@@ -59,6 +59,9 @@ pub struct Config {
     /// HTTP CONNECT-прокси для трафика к relay: сюда подключается маскирующий транспорт
     /// (Xray / sing-box / shoes с REALITY и т.п.). Прямые UDP-пути через прокси не идут.
     pub proxy: Option<url::Url>,
+    /// PEM с корневыми сертификатами relay. Если задан, доверяем ТОЛЬКО им
+    /// (свои relay без публичных CA и без засветки доменов в CT-логах).
+    pub relay_ca: Option<std::path::PathBuf>,
     pub vpn: Option<vpn::Vpn>,
 }
 
@@ -85,8 +88,16 @@ impl Node {
         if let Some(proxy) = cfg.proxy {
             builder = builder.proxy_url(proxy);
         }
+        if let Some(path) = &cfg.relay_ca {
+            use rustls_pki_types::{CertificateDer, pem::PemObject};
+            let roots = CertificateDer::pem_file_iter(path)
+                .and_then(|certs| certs.collect::<Result<Vec<_>, _>>())
+                .with_context(|| format!("не удалось прочитать {}", path.display()))?;
+            anyhow::ensure!(!roots.is_empty(), "{}: нет сертификатов", path.display());
+            builder = builder.ca_tls_config(iroh::tls::CaTlsConfig::custom_roots(roots));
+        }
         #[cfg(test)]
-        {
+        if cfg.relay_ca.is_none() {
             builder = builder.ca_tls_config(iroh::tls::CaTlsConfig::insecure_skip_verify());
         }
         if cfg.lan {
@@ -192,7 +203,7 @@ mod tests {
 
     #[tokio::test]
     async fn ping_over_localhost() -> Result<()> {
-        let cfg = || Config { key: SecretKey::generate(), relay_mode: RelayMode::Disabled, lan: false, proxy: None, vpn: None };
+        let cfg = || Config { key: SecretKey::generate(), relay_mode: RelayMode::Disabled, lan: false, proxy: None, relay_ca: None, vpn: None };
         let a = Node::bind(cfg()).await?;
         let b = Node::bind(cfg()).await?;
         let mut p = a.pinger(b.endpoint().addr()).await?;
@@ -260,6 +271,7 @@ mod tests {
             relay_mode: RelayMode::Custom(relay_map),
             lan: false,
             proxy: Some(proxy),
+            relay_ca: None,
             vpn: None,
         })
         .await?;

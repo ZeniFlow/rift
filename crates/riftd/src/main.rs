@@ -16,6 +16,9 @@ struct Cli {
     /// HTTP-прокси для трафика к relay (локальный маскирующий клиент: Xray, sing-box, shoes…).
     #[arg(long, env = "RIFT_PROXY", global = true)]
     proxy: Option<Url>,
+    /// PEM с корневым сертификатом своих relay: доверять только ему.
+    #[arg(long, env = "RIFT_RELAY_CA", global = true)]
+    relay_ca: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -81,7 +84,7 @@ async fn main() -> Result<()> {
         let (ifname, from_tun, to_tun) =
             vpn::open_tun(me).context("не удалось создать TUN (нужен sudo / администратор)")?;
         let vpn = vpn::Vpn::new(key.public(), peers.clone(), to_tun);
-        let node = Node::bind(Config { key, relay_mode, lan: true, proxy: cli.proxy, vpn: Some(vpn.clone()) }).await?;
+        let node = Node::bind(Config { key, relay_mode, lan: true, proxy: cli.proxy, relay_ca: cli.relay_ca, vpn: Some(vpn.clone()) }).await?;
         tokio::spawn(vpn.run(node.endpoint().clone(), from_tun));
         println!("NodeID: {}\nVPN:    {me} на {ifname}\n\nPeers:", node.id());
         for p in &peers {
@@ -92,7 +95,7 @@ async fn main() -> Result<()> {
         return node.shutdown().await;
     }
 
-    let node = Node::bind(Config { key, relay_mode, lan: true, proxy: cli.proxy, vpn: None }).await?;
+    let node = Node::bind(Config { key, relay_mode, lan: true, proxy: cli.proxy, relay_ca: cli.relay_ca, vpn: None }).await?;
     match cli.cmd {
         Cmd::Id | Cmd::Vpn { .. } => unreachable!(),
         Cmd::Listen => {

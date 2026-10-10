@@ -1,0 +1,50 @@
+# Каждая нода за своим NAT-роутером, relay во «внешней» сети wan (TLS + QUIC address discovery).
+# a — за обычным Linux MASQUERADE, b — за «лёгким» NAT. Две MASQUERADE друг против друга
+# не пробиваются: ранний входящий пакет занимает порт в conntrack, и NAT меняет порт
+# (как у многих домашних роутеров). Тогда трафик идёт через relay — это проверяет сценарий flat.
+x-node: &node
+  image: rift-e2e
+  cap_add: [NET_ADMIN]
+  devices: [/dev/net/tun]
+  sysctls: { net.ipv6.conf.all.disable_ipv6: 0 }
+  volumes: [shared:/shared]
+x-router: &router
+  image: rift-e2e
+  cap_add: [NET_ADMIN]
+  sysctls: { net.ipv4.ip_forward: 1 }
+
+services:
+  relay:
+    image: rift-e2e
+    build: { context: ../.., dockerfile: tests/e2e/Dockerfile }
+    command: sh /e2e/relay.sh 10.9.0.10
+    volumes: [shared:/shared]
+    networks: { wan: { ipv4_address: 10.9.0.10 } }
+  nat_a:
+    <<: *router
+    command: sh -c "iptables -t nat -A POSTROUTING -s 10.1.0.0/24 ! -d 10.1.0.0/24 -j MASQUERADE && sleep infinity"
+    networks: { lan_a: { ipv4_address: 10.1.0.254 }, wan: { ipv4_address: 10.9.0.11 } }
+  nat_b:
+    <<: *router
+    # «Лёгкий» NAT (full cone): любой входящий UDP пробрасывается на ноду b.
+    command: sh -c "iptables -t nat -A POSTROUTING -s 10.2.0.0/24 ! -d 10.2.0.0/24 -j MASQUERADE && iptables -t nat -A PREROUTING -d 10.9.0.12 -p udp -j DNAT --to-destination 10.2.0.10 && sleep infinity"
+    networks: { lan_b: { ipv4_address: 10.2.0.254 }, wan: { ipv4_address: 10.9.0.12 } }
+  a:
+    <<: *node
+    command: sh /e2e/node.sh a b
+    environment: { GATEWAY: 10.1.0.254, RELAY: "https://10.9.0.10", RIFT_RELAY_CA: /shared/ca.crt }
+    networks: { lan_a: { ipv4_address: 10.1.0.10 } }
+    depends_on: [nat_a, relay]
+  b:
+    <<: *node
+    command: sh /e2e/node.sh b a
+    environment: { GATEWAY: 10.2.0.254, RELAY: "https://10.9.0.10", RIFT_RELAY_CA: /shared/ca.crt }
+    networks: { lan_b: { ipv4_address: 10.2.0.10 } }
+    depends_on: [nat_b, relay]
+
+networks:
+  wan: { ipam: { config: [{ subnet: 10.9.0.0/24 }] } }
+  lan_a: { internal: true, ipam: { config: [{ subnet: 10.1.0.0/24 }] } }
+  lan_b: { internal: true, ipam: { config: [{ subnet: 10.2.0.0/24 }] } }
+volumes:
+  shared: {}

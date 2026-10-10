@@ -4,7 +4,7 @@
 //! Ed25519-ключ под 112 бит, поэтому src каждого входящего пакета сверяется с ключом соединения.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     net::Ipv6Addr,
     sync::{Arc, Mutex},
 };
@@ -52,10 +52,21 @@ pub struct Vpn {
 struct Inner {
     me: Ipv6Addr,
     peers: HashMap<Ipv6Addr, EndpointAddr>,
-    conns: Mutex<HashMap<NodeId, Connection>>,
-    dialing: Mutex<HashSet<NodeId>>,
+    state: Mutex<State>,
     to_tun: mpsc::Sender<Bytes>,
 }
+
+/// Соединения и очереди дозвона под одним замком: пакет не может застрять в очереди,
+/// которую уже выгребли.
+#[derive(Debug, Default)]
+struct State {
+    conns: HashMap<NodeId, Connection>,
+    /// Пир, до которого идёт дозвон → пакеты, ждущие соединения.
+    pending: HashMap<NodeId, Vec<Bytes>>,
+}
+
+/// Сколько пакетов держим на пира, пока дозваниваемся.
+const PENDING_MAX: usize = 64;
 
 impl Vpn {
     /// `peers` — кому разрешено с нами говорить и как до них дозвониться.
@@ -66,8 +77,7 @@ impl Vpn {
             inner: Arc::new(Inner {
                 me: addr_of(&me),
                 peers,
-                conns: Default::default(),
-                dialing: Default::default(),
+                state: Default::default(),
                 to_tun,
             }),
         }
@@ -87,28 +97,30 @@ impl Vpn {
     fn send(&self, endpoint: &Endpoint, pkt: Bytes) {
         let Some((_, dst)) = ipv6_src_dst(&pkt) else { return };
         let Some(peer) = self.inner.peers.get(&dst) else { return };
-        let conn = self.inner.conns.lock().unwrap().get(&peer.id).cloned();
-        match conn {
-            Some(conn) => send_on(conn, pkt),
-            None => self.dial(endpoint.clone(), peer.clone()),
-        }
-    }
-
-    // ponytail: пока идёт дозвон, пакеты к этой ноде теряются (TCP перешлёт). Очередь — если будет мешать.
-    fn dial(&self, endpoint: Endpoint, peer: EndpointAddr) {
-        if !self.inner.dialing.lock().unwrap().insert(peer.id) {
+        let mut state = self.inner.state.lock().unwrap();
+        if let Some(conn) = state.conns.get(&peer.id) {
+            send_on(conn.clone(), pkt);
             return;
         }
+        if let Some(queue) = state.pending.get_mut(&peer.id) {
+            if queue.len() < PENDING_MAX {
+                queue.push(pkt);
+            }
+            return;
+        }
+        state.pending.insert(peer.id, vec![pkt]);
+        drop(state);
+        self.dial(endpoint.clone(), peer.clone());
+    }
+
+    fn dial(&self, endpoint: Endpoint, peer: EndpointAddr) {
         let this = self.clone();
         tokio::spawn(async move {
             let id = peer.id;
             match endpoint.connect(peer, VPN_ALPN).await {
-                Ok(conn) => {
-                    this.inner.dialing.lock().unwrap().remove(&id);
-                    this.serve(conn).await;
-                }
+                Ok(conn) => this.serve(conn).await,
                 Err(e) => {
-                    this.inner.dialing.lock().unwrap().remove(&id);
+                    this.inner.state.lock().unwrap().pending.remove(&id);
                     warn!("vpn: не удалось соединиться с {}: {e}", id.fmt_short());
                 }
             }
@@ -119,7 +131,13 @@ impl Vpn {
     async fn serve(&self, conn: Connection) {
         let remote = conn.remote_id();
         let src = addr_of(&remote);
-        self.inner.conns.lock().unwrap().insert(remote, conn.clone());
+        {
+            let mut state = self.inner.state.lock().unwrap();
+            state.conns.insert(remote, conn.clone());
+            for pkt in state.pending.remove(&remote).unwrap_or_default() {
+                send_on(conn.clone(), pkt);
+            }
+        }
         debug!("vpn: {} подключён", remote.fmt_short());
 
         let datagrams = async {
@@ -136,7 +154,7 @@ impl Vpn {
         };
         tokio::join!(datagrams, streams);
 
-        let mut conns = self.inner.conns.lock().unwrap();
+        let conns = &mut self.inner.state.lock().unwrap().conns;
         if conns.get(&remote).is_some_and(|c| c.stable_id() == conn.stable_id()) {
             conns.remove(&remote);
         }
@@ -256,6 +274,7 @@ mod tests {
             relay_mode: RelayMode::Disabled,
             lan: false,
             proxy: None,
+            relay_ca: None,
             vpn: Some(vpn.clone()),
         })
         .await
@@ -268,7 +287,7 @@ mod tests {
     async fn send_until_delivered(from: &TestNode, to: &mut TestNode, pkt: Bytes, tries: u32) -> bool {
         for _ in 0..tries {
             from.from_tun.send(pkt.clone()).await.unwrap();
-            if let Ok(Some(got)) = tokio::time::timeout(Duration::from_millis(100), to.to_tun.recv()).await {
+            if let Ok(Some(got)) = tokio::time::timeout(Duration::from_secs(3), to.to_tun.recv()).await {
                 assert_eq!(got, pkt);
                 return true;
             }
@@ -285,12 +304,13 @@ mod tests {
         let c = node(kc, vec![b.node.endpoint().addr()]).await;
 
         let (aa, ba, ca) = (a.addr, b.addr, c.addr);
-        assert!(send_until_delivered(&a, &mut b, packet(aa, ba, 100), 50).await);
+        // Первый же пакет доходит: он ждёт в очереди, пока идёт дозвон.
+        assert!(send_until_delivered(&a, &mut b, packet(aa, ba, 100), 1).await);
         // Больше любой датаграммы → уходит QUIC-стримом.
         assert!(send_until_delivered(&a, &mut b, packet(aa, ba, 3000), 50).await);
         // C не в списке peers у B.
-        assert!(!send_until_delivered(&c, &mut b, packet(ca, ba, 100), 10).await);
+        assert!(!send_until_delivered(&c, &mut b, packet(ca, ba, 100), 1).await);
         // A подделывает src.
-        assert!(!send_until_delivered(&a, &mut b, packet(ca, ba, 100), 10).await);
+        assert!(!send_until_delivered(&a, &mut b, packet(ca, ba, 100), 1).await);
     }
 }
