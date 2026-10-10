@@ -49,10 +49,14 @@ pub fn load_or_create_key(path: &Path) -> Result<SecretKey> {
 }
 
 pub mod bridge;
+pub mod client;
 pub mod host;
 pub mod logsvc;
 pub mod names;
 pub mod vpn;
+
+#[cfg(test)]
+pub(crate) mod testutil;
 
 /// Настройки ноды.
 pub struct Config {

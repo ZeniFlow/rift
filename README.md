@@ -132,6 +132,7 @@ riftd --relay $RELAY get rift://shop.brand/ $T --resolver $RESOLVER
 rift-ca notice --key root.key --freeze shop.brand -o freeze.json        # takedown (control: + --control-cert control.json)
 riftd --relay $RELAY publish --resolver $RESOLVER --notice freeze.json
 riftd --relay $RELAY notices $T --resolver $RESOLVER                    # клиент подтягивает заморозки/отзывы в <home>/notices.json
+rift-ca notice --key root.key --unfreeze shop.brand -o unfreeze.json     # снять заморозку: побеждает объявление с БОЛЬШИМ временем
 ```
 
 Приложение видит заголовок `Rift-Client-Id` с проверенным NodeID клиента (это готовая авторизация без паролей),
@@ -140,5 +141,16 @@ riftd --relay $RELAY notices $T --resolver $RESOLVER                    # кли
 Заморозку достаточно опубликовать **одному** резолверу: соседи (`--peer`) подтягивают объявления сами. Клиент
 сохраняет увиденные объявления в `<home>/notices.json`: раз увидев заморозку, он не откроет домен, даже если
 отставший или злонамеренный резолвер её промолчит.
+
+### Открыть сайт в браузере (прокси)
+
+```bash
+riftd --relay $RELAY proxy $T --resolver $RESOLVER          # слушает 127.0.0.1:8080, только loopback
+curl -x http://127.0.0.1:8080 http://shop.brand.rift/       # или укажи HTTP-прокси в браузере
+```
+
+Имя сайта `shop.brand` открывается как `http://shop.brand.rift/` (системные: `http://control.rift/`).
+Прокси отдаёт только `*.rift` (остальное — 403: это не прокси в интернет), заморозка даёт 451, HTTPS (CONNECT) пока 501.
+Через прокси ты ходишь под своим NodeID, поэтому он слушает только loopback.
 
 `--threshold 0` отключает проверку свидетелей (только для отладки: защиты от выпуска задним числом нет).

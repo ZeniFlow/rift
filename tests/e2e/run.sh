@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 SCENARIO=${1:-flat}
 if [ "$SCENARIO" = names ]; then
   # Всё в одном контейнере: сеть контейнеров тут не нужна, проверяется протокол.
-  docker build -q -t rift-e2e -f Dockerfile ../.. >/dev/null
+  docker build --pull=false -q -t rift-e2e -f Dockerfile ../.. >/dev/null
   exec docker run --rm rift-e2e bash /e2e/names.sh
 fi
 FILE=compose.yaml; [ "$SCENARIO" = nat ] && FILE=compose.nat.yaml

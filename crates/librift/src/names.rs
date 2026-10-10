@@ -265,6 +265,18 @@ pub fn check(trust: &Trust, name: &str, resp: Response, now: Time, known: &[Anno
     }
 }
 
+/// Домен заморожен или отозван — и это подтверждено подписью. Отдельный тип, чтобы прокси мог ответить 451, а не 502.
+#[derive(Debug)]
+pub struct Blocked(pub String);
+
+impl std::fmt::Display for Blocked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Blocked {}
+
 /// Резолвит имя. Берёт самую свежую (по `seq`) проверенную копию.
 /// Заморозка/отзыв, подтверждённые подписью хотя бы от одного резолвера, действуют сразу:
 /// отказ безопаснее, чем показать замороженный домен.
@@ -287,7 +299,7 @@ pub async fn resolve(
                 match check(trust, name, resp, now(), cache.all()) {
                     Ok(Some(x)) => found.push(x),
                     Ok(None) => {}
-                    Err(e @ (TrustError::Frozen(_) | TrustError::Revoked(_))) => bail!("{name}: {e}"),
+                    Err(e @ (TrustError::Frozen(_) | TrustError::Revoked(_))) => return Err(Blocked(format!("{name}: {e}")).into()),
                     Err(e) => last_err = Some(e.to_string()),
                 }
             }
@@ -342,56 +354,17 @@ pub async fn publish(endpoint: &Endpoint, resolvers: &[EndpointAddr], req: Reque
 
 #[cfg(test)]
 mod tests {
-    use iroh::{RelayMode, SecretKey};
-    use rift_trust::{ControlCert, DnsRecords, DomainRecord, Notice, PublicKey, Record, Signed, ZoneCert, log::logged_now};
+    use iroh::SecretKey;
+    use rift_trust::{ControlCert, Notice, Signed};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
     };
 
     use super::*;
-    use crate::{Config, Node, host::{HTTP_ALPN, Host, fetch, get_request}};
+    use crate::{Node, host::{HTTP_ALPN, Host, fetch, get_request}};
 
-    const DAY: Time = 86_400;
-
-    /// Единственный свидетель всех тестов.
-    fn witness() -> &'static SecretKey {
-        static W: std::sync::OnceLock<SecretKey> = std::sync::OnceLock::new();
-        W.get_or_init(SecretKey::generate)
-    }
-
-    fn trust(root: &SecretKey) -> Trust {
-        Trust { root: root.public(), witnesses: vec![witness().public()], threshold: 1 }
-    }
-
-    /// Цепочка root → control → зона `brand` (владелец зоны сам регистрирует) → shop.brand → хост.
-    fn bundle(root: &SecretKey, control: &SecretKey, zone: &SecretKey, owner: &SecretKey, host: PublicKey, seq: u64) -> Bundle {
-        let (t, name) = (now() - 60, "shop.brand".to_string());
-        let zone_cert = Signed::sign(ZoneCert { zone: "brand".into(), owner: zone.public(), issued_at: t, expires_at: t + 700 * DAY }, control);
-        let domain = Signed::sign(DomainRecord { name: name.clone(), owner: owner.public(), issued_at: t, expires_at: t + 300 * DAY }, zone);
-        Bundle {
-            control: Signed::sign(ControlCert { key: control.public(), issued_at: t, expires_at: t + 90 * DAY }, root),
-            zone: logged_now(control, zone_cert, t + 1, &[witness()]),
-            registrar: None,
-            domain: logged_now(zone, domain, t + 1, &[witness()]),
-            dns: Signed::sign(DnsRecords { name, seq, records: vec![Record::Host(host)], issued_at: t, expires_at: t + 30 * DAY }, owner),
-        }
-    }
-
-    async fn node(extra: Vec<(Vec<u8>, crate::Handler)>) -> Node {
-        Node::bind(Config {
-            key: SecretKey::generate(),
-            relay_mode: RelayMode::Disabled,
-            lan: false,
-            proxy: None,
-            bridge: None,
-            relay_ca: None,
-            vpn: None,
-            extra,
-        })
-        .await
-        .unwrap()
-    }
+    use crate::testutil::{DAY, bundle, node, trust};
 
     /// Приложение хоста: на любой запрос отвечает 200.
     async fn app() -> String {

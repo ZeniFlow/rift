@@ -86,6 +86,8 @@ pub enum Notice {
     RevokeZone { zone: String, since: Time },
     /// Takedown: домен не резолвится.
     Freeze { name: String, since: Time },
+    /// Снятие заморозки. Побеждает объявление с БОЛЬШИМ `since`; при равенстве — заморозка.
+    Unfreeze { name: String, since: Time },
 }
 
 /// Объявление + кем подписано. Control ротируется, поэтому объявление несёт СВОЙ сертификат control
@@ -109,7 +111,7 @@ impl Announcement {
     /// Относится ли объявление к этой цепочке. Резолвер отдаёт клиенту только такие: компактно и без утечки чужого.
     pub fn concerns(&self, b: &Bundle, root: &PublicKey) -> bool {
         match &self.notice.body {
-            Notice::Freeze { name, .. } => *name == b.domain.cert.body.name,
+            Notice::Freeze { name, .. } | Notice::Unfreeze { name, .. } => *name == b.domain.cert.body.name,
             Notice::RevokeZone { zone, .. } => *zone == b.zone.cert.body.zone,
             Notice::RevokeKey { key, .. } => {
                 key == root
@@ -350,13 +352,18 @@ pub fn verify(trust: &Trust, b: &Bundle, notices: &[Announcement], now: Time) ->
     live("записи", dns.issued_at, dns.expires_at, now)?;
 
     // 6. объявления: подписаны root или любым control, которого признаёт root
+    let mut freeze: Option<(Time, bool)> = None; // (since последнего решения, заморожено ли)
     for n in notices {
         if !n.valid(root) {
             continue;
         }
         match &n.notice.body {
-            Notice::Freeze { name, since } if *name == dom.name && *since <= now => {
-                return Err(Error::Frozen(dom.name.clone()));
+            Notice::Freeze { name, since } | Notice::Unfreeze { name, since } if *name == dom.name && *since <= now => {
+                let frozen = matches!(n.notice.body, Notice::Freeze { .. });
+                // Старая заморозка, повторённая после снятия, не побеждает; при равенстве времени — заморозка.
+                if freeze.is_none_or(|(t, f)| *since > t || (*since == t && frozen && !f)) {
+                    freeze = Some((*since, frozen));
+                }
             }
             Notice::RevokeZone { zone: z, since } if *z == zone.zone && *since <= now => {
                 return Err(Error::Revoked("зона"));
@@ -378,6 +385,10 @@ pub fn verify(trust: &Trust, b: &Bundle, notices: &[Announcement], now: Time) ->
             }
             _ => {}
         }
+    }
+
+    if freeze.is_some_and(|(_, frozen)| frozen) {
+        return Err(Error::Frozen(dom.name.clone()));
     }
 
     let valid_until = [Some(zone.expires_at), b.registrar.as_ref().map(|r| r.cert.body.expires_at), Some(dom.expires_at), Some(dns.expires_at)]
@@ -765,6 +776,43 @@ mod tests {
         let mut forged = by_control(Notice::Freeze { name: "shop.brand".into(), since: T0 });
         forged.notice.body = Notice::Freeze { name: "other.brand".into(), since: T0 };
         assert!(ok(&w, &b, &[forged], now).is_ok());
+    }
+
+    #[test]
+    fn unfreeze_lifts_a_freeze_and_old_freezes_cannot_be_replayed() {
+        let w = world();
+        let b = build(&w, &Opt::default());
+        let by_control = |n| Announcement { notice: Signed::sign(n, &w.control), control: Some(b.control.clone()) };
+        let freeze = |since| by_control(Notice::Freeze { name: "shop.brand".into(), since });
+        let unfreeze = |since| by_control(Notice::Unfreeze { name: "shop.brand".into(), since });
+        let frozen = |r: Result<Resolved, Error>| matches!(r, Err(Error::Frozen(_)));
+
+        // Заморожен с T0+1, снят с T0+2: до снятия — заморожен, после — открыт.
+        let both = [freeze(T0 + DAY), unfreeze(T0 + 2 * DAY)];
+        assert!(frozen(ok(&w, &b, &both, T0 + DAY + 1)));
+        assert!(ok(&w, &b, &both, T0 + 3 * DAY).is_ok());
+        // Порядок объявлений не важен.
+        let rev = [unfreeze(T0 + 2 * DAY), freeze(T0 + DAY)];
+        assert!(ok(&w, &b, &rev, T0 + 3 * DAY).is_ok());
+        // Повторная заморозка позже снятия побеждает; старая заморозка, пришедшая после снятия, — нет.
+        assert!(frozen(ok(&w, &b, &[freeze(T0 + DAY), unfreeze(T0 + 2 * DAY), freeze(T0 + 3 * DAY)], T0 + 4 * DAY)));
+        assert!(ok(&w, &b, &[unfreeze(T0 + 2 * DAY), freeze(T0 + DAY), freeze(T0 + DAY)], T0 + 4 * DAY).is_ok());
+        // Одно и то же время: безопаснее оставить заморозку.
+        assert!(frozen(ok(&w, &b, &[freeze(T0 + DAY), unfreeze(T0 + DAY)], T0 + 2 * DAY)));
+        assert!(frozen(ok(&w, &b, &[unfreeze(T0 + DAY), freeze(T0 + DAY)], T0 + 2 * DAY)));
+        // Снятие без заморозки безвредно; снятие чужого имени ничего не снимает.
+        assert!(ok(&w, &b, &[unfreeze(T0 + DAY)], T0 + 2 * DAY).is_ok());
+        let other = by_control(Notice::Unfreeze { name: "other.brand".into(), since: T0 + 2 * DAY });
+        assert!(frozen(ok(&w, &b, &[freeze(T0 + DAY), other], T0 + 3 * DAY)));
+        // Снятие от постороннего — мусор: заморозка остаётся.
+        let stranger = SecretKey::generate();
+        let fake = Announcement {
+            notice: Signed::sign(Notice::Unfreeze { name: "shop.brand".into(), since: T0 + 2 * DAY }, &stranger),
+            control: Some(Signed::sign(ControlCert { key: stranger.public(), issued_at: T0, expires_at: T0 + DAY }, &stranger)),
+        };
+        assert!(frozen(ok(&w, &b, &[freeze(T0 + DAY), fake], T0 + 3 * DAY)));
+        // Снятие «из будущего» ещё не действует.
+        assert!(frozen(ok(&w, &b, &[freeze(T0 + DAY), unfreeze(T0 + 4 * DAY)], T0 + 3 * DAY)));
     }
 
     #[test]

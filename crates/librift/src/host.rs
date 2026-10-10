@@ -44,7 +44,7 @@ use crate::NodeId;
 pub const HTTP_ALPN: &[u8] = b"rift/http/0";
 const MAX_RESPONSE: usize = 64 * 1024 * 1024;
 
-type Body = BoxBody<Bytes, hyper::Error>;
+pub(crate) type Body = BoxBody<Bytes, hyper::Error>;
 
 fn body(b: impl Into<Bytes>) -> Body {
     Full::new(b.into()).map_err(|never| match never {}).boxed()

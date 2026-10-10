@@ -15,3 +15,4 @@ rift-reality = { version = "0.0.1", path = "../rift-reality" }
 rift-trust = { version = "0.0.1", path = "../rift-trust" }
 serde = "1.0.229"
 serde_json = "1.0.152"
+libc = "0.2.190"

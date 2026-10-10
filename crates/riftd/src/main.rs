@@ -3,6 +3,7 @@ use std::{net::SocketAddr, path::PathBuf, time::Duration};
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use librift::bridge::BridgeUrl;
+use librift::client::{RiftClient, serve_proxy};
 use librift::host::{HTTP_ALPN, Host};
 use librift::logsvc::{self, LOG_ALPN, LogService, WITNESS_ALPN, WitnessService};
 use librift::names::{self, NAMES_ALPN, NoticeCache, Request, Resolver};
@@ -109,6 +110,16 @@ enum Cmd {
         #[arg(long, default_value_t = 60)]
         sync_secs: u64,
     },
+    /// Локальный HTTP-прокси для браузера: `http://имя.зона.rift/` открывается через него (HTTPS пока нет).
+    Proxy {
+        #[command(flatten)]
+        trust: TrustArgs,
+        #[arg(long = "resolver", env = "RIFT_RESOLVERS", value_delimiter = ',', required = true)]
+        resolvers: Vec<String>,
+        /// Только loopback: через прокси ходишь под своей личностью (NodeID), чужим её отдавать нельзя.
+        #[arg(long, default_value = "127.0.0.1:8080")]
+        listen: SocketAddr,
+    },
     /// Подтянуть объявления (заморозки, отзывы) в локальный кэш клиента `<home>/notices.json`.
     Notices {
         #[command(flatten)]
@@ -209,6 +220,14 @@ async fn main() -> Result<()> {
         )
         .init();
     let cli = Cli::parse();
+    // Разовые команды ведут себя как обычные утилиты: закрытый stdout (`riftd get … | head`) — тихий выход, а не
+    // паника с дампом. Демонам (host, resolver, log, vpn…) так нельзя: запись в закрытый сокет не должна убивать процесс.
+    #[cfg(unix)]
+    if matches!(cli.cmd, Cmd::Id | Cmd::Get { .. } | Cmd::Ping { .. } | Cmd::Publish { .. } | Cmd::Notices { .. } | Cmd::LogAdd { .. } | Cmd::LogProof { .. }) {
+        unsafe {
+            libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+        }
+    }
 
     let home = match cli.home {
         Some(h) => h,
@@ -307,6 +326,18 @@ async fn main() -> Result<()> {
                 rift_trust::to_json(&proof).as_bytes(),
             )?;
             println!("{}  (голова размера {}, подписей: {})", out.display(), proof.head.body.size, proof.cosigs.len());
+        }
+        Cmd::Proxy { trust, resolvers, listen } => {
+            anyhow::ensure!(listen.ip().is_loopback(), "прокси слушает только loopback (127.0.0.1 / ::1), не {listen}");
+            let trust = trust.get()?;
+            let cache = NoticeCache::load(home.join("notices.json"), &trust.root)?;
+            let client = std::sync::Arc::new(RiftClient::new(node.endpoint().clone(), trust, parse_peers(&resolvers, &default_relay)?, default_relay.clone(), cache));
+            let listener = tokio::net::TcpListener::bind(listen).await.with_context(|| format!("не удалось занять {listen}"))?;
+            println!("Прокси: {}\nукажи его HTTP-прокси в браузере (или `curl -x http://{}`) и открывай http://имя.зона.rift/\nCtrl-C — выход.", listener.local_addr()?, listener.local_addr()?);
+            tokio::select! {
+                r = serve_proxy(client, listener) => r?,
+                _ = tokio::signal::ctrl_c() => {}
+            }
         }
         Cmd::Notices { trust, resolvers } => {
             let trust = trust.get()?;

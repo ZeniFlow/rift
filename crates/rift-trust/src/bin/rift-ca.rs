@@ -77,6 +77,8 @@ enum Cmd {
         /// Сертификат control (control.json), если подписывает control. Без него — подпись root.
         #[arg(long)] control_cert: Option<PathBuf>,
         #[arg(long)] freeze: Option<String>,
+        /// Снять заморозку (действует объявление с большим временем).
+        #[arg(long)] unfreeze: Option<String>,
         #[arg(long)] revoke_zone: Option<String>,
         #[arg(long)] revoke_key: Option<PublicKey>,
         #[arg(short, long)] out: PathBuf,
@@ -177,6 +179,10 @@ fn write_new(out: &Path, text: &str) -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    #[cfg(unix)]
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     match Cmd::parse() {
         Cmd::Keygen { file } => {
             if !file.exists() {
@@ -215,13 +221,14 @@ fn main() -> Result<()> {
             let records = hosts.into_iter().map(Record::Host).chain(txt.into_iter().map(Record::Txt)).collect();
             issue(DnsRecords { name, seq, records, issued_at: t, expires_at: t + days * DAY }, &owner_key, &out)?
         }
-        Cmd::Notice { key, control_cert, freeze, revoke_zone, revoke_key, out } => {
+        Cmd::Notice { key, control_cert, freeze, unfreeze, revoke_zone, revoke_key, out } => {
             let since = now();
-            let n = match (freeze, revoke_zone, revoke_key) {
-                (Some(name), None, None) => Notice::Freeze { name, since },
-                (None, Some(zone), None) => Notice::RevokeZone { zone, since },
-                (None, None, Some(key)) => Notice::RevokeKey { key, since },
-                _ => bail!("нужен ровно один из --freeze / --revoke-zone / --revoke-key"),
+            let n = match (freeze, unfreeze, revoke_zone, revoke_key) {
+                (Some(name), None, None, None) => Notice::Freeze { name, since },
+                (None, Some(name), None, None) => Notice::Unfreeze { name, since },
+                (None, None, Some(zone), None) => Notice::RevokeZone { zone, since },
+                (None, None, None, Some(key)) => Notice::RevokeKey { key, since },
+                _ => bail!("нужен ровно один из --freeze / --unfreeze / --revoke-zone / --revoke-key"),
             };
             let a = Announcement {
                 notice: Signed::sign(n, &load_key(&key)?),
