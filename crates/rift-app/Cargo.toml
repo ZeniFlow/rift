@@ -20,6 +20,7 @@ http-body-util = "0.1"
 bytes = "1.12.1"
 librift = { version = "0.0.1", path = "../librift" }
 rift-trust = { version = "0.0.1", path = "../rift-trust" }
+rift-wallet = { version = "0.0.1", path = "../rift-wallet" }
 sha1 = "0.11.0"
 base64 = "0.23.1"
 serde = { version = "1.0.229", features = ["derive"] }

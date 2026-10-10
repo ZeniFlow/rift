@@ -1,0 +1,31 @@
+[package]
+name = "rift-wallet"
+description = "Кошелёк Rift: ключи на устройстве, TON (V4R2), jetton'ы RIFT и USDT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+tokio.workspace = true
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.152"
+tonlib-core = "0.26.11"
+num-bigint = "0.4"
+hyper = { version = "1", features = ["http1", "client"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1.12.1"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-pki-types = { version = "1", features = ["std"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+webpki-roots = "1"
+url = "2"
+base64 = "0.23.1"
+argon2 = "0.6.0"
+chacha20poly1305 = "0.11.0"
+getrandom = "0.4.3"
+
+[dev-dependencies]
+ed25519-dalek = "3.0.0"

@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="ru" data-motion="system" data-blur="off">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Кошелёк</title>
+<link rel="stylesheet" href="kit.css">
+<link rel="stylesheet" href="page.css">
+<style>
+  .wrap { max-width: 720px; }
+  .card { border: 1px solid var(--line); border-radius: var(--r-l); background: var(--field); padding: 18px; margin-bottom: 16px; animation: rise calc(220ms * var(--m)) var(--ease) both; }
+  .card h2 { margin: 0 0 12px; font-size: 13px; font-weight: 600; color: var(--text-2); }
+  .card p { margin: 0 0 12px; color: var(--text-2); line-height: 1.5; }
+  .badge { display: inline-flex; align-items: center; height: 24px; padding: 0 10px; border-radius: var(--r-full); background: var(--raised-2); color: var(--text-2); font-size: 12px; }
+  .badge.test { color: var(--warn); }
+  .addr { display: flex; align-items: center; gap: 10px; padding: 10px 12px 10px 16px; border: 1px solid var(--line); border-radius: var(--r-full); background: var(--bg); font: 13px var(--mono); }
+  .addr span { flex: 1; min-width: 0; overflow-wrap: anywhere; user-select: text; }
+  .row2 { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  label.f { display: block; margin: 0 0 12px; }
+  label.f > span { display: block; margin: 0 0 6px 4px; color: var(--text-2); font-size: 12px; }
+  .in { width: 100%; height: 40px; padding: 0 16px; border: 1px solid var(--line); border-radius: var(--r-full); background: var(--bg); color: var(--text); font: inherit; }
+  .in:focus { outline: 0; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+  textarea.in { height: 96px; padding: 12px 16px; border-radius: var(--r-l); resize: vertical; }
+  select.in { appearance: none; }
+  .err { margin: 0 0 12px; color: var(--bad); font-size: 13px; min-height: 0; }
+  .words { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; margin: 0 0 14px; padding: 0; list-style: none; counter-reset: w; }
+  .words li { counter-increment: w; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--r-full); background: var(--bg); font-family: var(--mono); font-size: 13px; user-select: text; }
+  .words li::before { content: counter(w) "  "; color: var(--text-3); }
+  .bal { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+  .bal:first-of-type { border-top: 0; }
+  .bal .sym { flex: none; display: grid; place-items: center; width: 36px; height: 36px; border-radius: var(--r-full); background: var(--raised-2); font-size: 11px; font-weight: 600; }
+  .bal .n { flex: 1; min-width: 0; } .bal .n small { display: block; color: var(--text-3); }
+  .bal .v { font-variant-numeric: tabular-nums; font-weight: 500; } .bal .v.bad { color: var(--bad); font-size: 12px; font-weight: 400; }
+  .tx { display: flex; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); font-size: 13px; }
+  .tx:first-of-type { border-top: 0; } .tx .m { flex: 1; min-width: 0; } .tx .m small { display: block; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tx .a { font-variant-numeric: tabular-nums; } .tx .a.in { color: var(--ok); }
+  .checks { display: flex; align-items: center; gap: 10px; margin: 0 0 14px; color: var(--text-2); }
+  .hide { display: none !important; }
+</style>
+</head>
+<body>
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/></symbol>
+</svg>
+<header class="topbar"><h1>Кошелёк</h1><span class="badge hide" id="net"></span></header>
+<main class="wrap" id="main"></main>
+<script src="kit.js"></script>
+<script>
+  const { h, icon, ui } = Kit;
+  const { invoke } = window.__TAURI__.core;
+  const { listen, emit } = window.__TAURI__.event;
+  listen('settings', (e) => Kit.applySettings(e.payload));
+  invoke('get_caps').then((c) => { Kit.caps.blur = c.blur; return invoke('get_settings'); }).then((s) => Kit.applySettings(s));
+
+  const main = document.getElementById('main');
+  const toast = (tone, title, text) => invoke('overlay_open', { spec: { kind: 'toast', tone, title, text } }).catch(() => {});
+  const ask = (spec) => invoke('overlay_ask', { spec: { kind: 'confirm', ...spec } });
+  const short = (a) => (a && a.length > 20 ? `${a.slice(0, 8)}…${a.slice(-6)}` : a || '');
+  const field = (label, input) => h('label', { class: 'f' }, h('span', {}, label), input);
+  const pw = (id, ph) => h('input', { class: 'in', id, type: 'password', placeholder: ph || 'Пароль', autocomplete: 'off' });
+  let net = 'testnet', timer = null;
+  const mark = (extra = {}) => emit('page-state', { page: 'wallet', ready: true, ...extra });
+
+  /* ---- нет кошелька ---- */
+  function viewNone() {
+    let mode = 'create', words = null;
+    const err = h('p', { class: 'err', id: 'err' });
+    const box = h('div');
+    const draw = () => {
+      box.textContent = '';
+      const nets = ui.segmented({ label: 'Сеть', value: net, options: [{ value: 'testnet', label: 'Тестовая' }, { value: 'mainnet', label: 'Основная' }], onChange: (v) => { net = v; } });
+      const p1 = pw('p1', 'Пароль (от 8 знаков)'), p2 = pw('p2', 'Повторите пароль');
+      const w = h('textarea', { class: 'in', id: 'words', placeholder: 'Через пробел, 24 слова', spellcheck: 'false', autocomplete: 'off' });
+      const go = h('button', { class: 'button primary', id: 'go' }, mode === 'create' ? 'Создать кошелёк' : 'Восстановить');
+      go.addEventListener('click', async () => {
+        err.textContent = '';
+        if (p1.value !== p2.value) { err.textContent = 'Пароли не совпадают.'; return; }
+        go.disabled = true;
+        try {
+          if (mode === 'create') { words = await invoke('wallet_create', { password: p1.value, network: net }); showWords(); }
+          else { await invoke('wallet_import', { words: w.value, password: p1.value, network: net }); await load(); }
+        } catch (e) { err.textContent = String(e); } finally { go.disabled = false; }
+      });
+      box.append(
+        h('div', { style: { marginBottom: '16px' } }, ui.segmented({ label: 'Действие', value: mode, options: [{ value: 'create', label: 'Новый кошелёк' }, { value: 'import', label: 'У меня есть слова' }], onChange: (v) => { mode = v; draw(); } })),
+        field('Сеть', nets), mode === 'import' ? field('Секретная фраза', w) : null, field('Пароль для этого устройства', p1), field('Пароль ещё раз', p2), err, go);
+    };
+    const showWords = () => {
+      const ok = h('input', { type: 'checkbox', id: 'saved' });
+      const cont = h('button', { class: 'button primary', id: 'cont', disabled: true, onclick: () => load() }, 'Продолжить');
+      ok.addEventListener('change', () => { cont.disabled = !ok.checked; });
+      box.textContent = ''; mark({ view: 'words', count: words.length });
+      box.append(h('p', {}, 'Запишите эти 24 слова на бумагу и храните в тайне. Это единственный способ вернуть деньги, если устройство потеряется. Rift слов не хранит и восстановить их не сможет.'),
+        h('ol', { class: 'words', id: 'wordlist' }, words.map((x) => h('li', {}, x))), h('label', { class: 'checks' }, ok, 'Я записал слова и понимаю, что без них доступ не вернуть'), cont);
+    };
+    draw();
+    main.replaceChildren(h('section', { class: 'card' }, h('h2', {}, 'Нет кошелька'), h('p', {}, 'Ключ создаётся и хранится только на этом устройстве, под вашим паролем. Мы его не видим и не можем восстановить.'), box));
+    mark({ view: 'none' });
+  }
+
+  /* ---- есть кошелёк ---- */
+  async function viewMain(st) {
+    net = st.network;
+    const badge = document.getElementById('net');
+    badge.textContent = st.network === 'testnet' ? 'Тестовая сеть' : 'Основная сеть'; badge.className = `badge${st.network === 'testnet' ? ' test' : ''}`;
+    const copy = h('button', { class: 'icon-btn', title: 'Скопировать адрес', 'aria-label': 'Скопировать адрес', onclick: async () => { try { await navigator.clipboard.writeText(st.address); toast('ok', 'Адрес скопирован'); } catch { toast('bad', 'Не удалось скопировать', 'Выделите адрес и скопируйте вручную.'); } } }, icon('copy'));
+    const balBox = h('div', { id: 'balances' }, h('p', {}, 'Загружаю…'));
+    const txBox = h('div', { id: 'history' });
+    const control = h('div', { class: 'row2' });
+    main.replaceChildren(
+      h('section', { class: 'card' }, h('h2', {}, 'Ваш адрес'), h('div', { class: 'addr' }, h('span', { id: 'address' }, st.address), copy), control),
+      h('section', { class: 'card' }, h('h2', {}, 'Монеты', ' '), balBox, h('div', { class: 'row2' }, h('button', { class: 'button', id: 'refresh', onclick: () => { refresh(); } }, icon('refresh'), 'Обновить'), h('button', { class: 'button', id: 'addtoken', onclick: () => addToken() }, 'Добавить монету'))),
+      h('div', { id: 'send-slot' }), h('section', { class: 'card' }, h('h2', {}, 'История TON'), txBox));
+
+    const fmtTime = (t) => new Date(t * 1000).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+    let tokens = [];
+    async function refresh() {
+      try {
+        tokens = await invoke('wallet_balances');
+        balBox.replaceChildren(...tokens.map((t) => h('div', { class: 'bal', 'data-symbol': t.symbol }, h('span', { class: 'sym' }, t.symbol.slice(0, 4)), h('span', { class: 'n' }, t.symbol, h('small', {}, t.name)), t.error ? h('span', { class: 'v bad', title: t.error }, 'не удалось получить') : h('span', { class: 'v' }, t.shown))));
+        fillSend();
+      } catch (e) { balBox.replaceChildren(h('p', { class: 'err' }, String(e))); }
+      try {
+        const txs = await invoke('wallet_history', { limit: 10 });
+        txBox.replaceChildren(...(txs.length ? txs.map((t) => h('div', { class: 'tx' }, h('span', { class: 'm' }, t.incoming ? 'Получено от ' : 'Отправлено на ', short(t.peer), h('small', {}, `${fmtTime(t.time)}${t.comment ? ` · ${t.comment}` : ''}`)), h('span', { class: `a${t.incoming ? ' in' : ''}` }, `${t.incoming ? '+' : '−'}${t.amount} TON`))) : [h('p', {}, 'Переводов пока нет.')]));
+      } catch (e) { txBox.replaceChildren(h('p', { class: 'err' }, String(e))); }
+      mark({ view: 'main', unlocked: st.unlocked, tokens: tokens.map((t) => t.symbol) });
+    }
+
+    /* Подпись нужна только для отправки: пароль спрашиваем, когда она нужна. */
+    const slot = document.getElementById('send-slot');
+    let sendUi = null;
+    function fillSend() {
+      if (!st.unlocked) {
+        const p = pw('unlock-pw'), e = h('p', { class: 'err' });
+        const b = h('button', { class: 'button primary', id: 'unlock', onclick: async () => { try { b.disabled = true; await invoke('wallet_unlock', { password: p.value }); st.unlocked = true; fillSend(); } catch (x) { e.textContent = String(x); b.disabled = false; } } }, 'Разблокировать');
+        slot.replaceChildren(h('section', { class: 'card' }, h('h2', {}, 'Отправить'), h('p', {}, 'Чтобы отправлять, разблокируйте кошелёк паролем. Через 5 минут без действий он блокируется сам.'), field('Пароль', p), e, b));
+        return;
+      }
+      const sel = h('select', { class: 'in', id: 'send-token' }, tokens.map((t) => h('option', { value: t.symbol }, `${t.symbol}${t.shown ? `: ${t.shown}` : ''}`)));
+      const to = h('input', { class: 'in', id: 'send-to', placeholder: 'Адрес получателя', spellcheck: 'false', autocomplete: 'off' });
+      const amount = h('input', { class: 'in', id: 'send-amount', placeholder: '0.0', inputmode: 'decimal', autocomplete: 'off' });
+      const comment = h('input', { class: 'in', id: 'send-comment', placeholder: 'Комментарий (необязательно, виден всем)', autocomplete: 'off' });
+      const err = h('p', { class: 'err', id: 'send-err' });
+      const btn = h('button', { class: 'button primary', id: 'send' }, 'Отправить');
+      sel.addEventListener('change', () => comment.classList.toggle('hide', sel.value !== 'TON'));
+      btn.addEventListener('click', async () => {
+        err.textContent = '';
+        try {
+          const chk = await invoke('wallet_check_send', { symbol: sel.value, to: to.value, amount: amount.value });
+          const ok = await ask({ title: 'Подтвердите перевод', text: `Отправить ${chk.amount} ${sel.value} на адрес ${chk.friendly}?${chk.bounce ? '' : ' Адрес без возврата: если кошелька там нет, деньги останутся ждать получателя.'} Перевод нельзя отменить.`, confirmLabel: 'Отправить' });
+          if (ok !== true) return;
+          btn.disabled = true;
+          await invoke('wallet_send', { symbol: sel.value, to: to.value, amount: amount.value, comment: sel.value === 'TON' ? comment.value || null : null });
+          toast('ok', 'Перевод отправлен', 'Он появится в истории через несколько секунд.');
+          to.value = amount.value = comment.value = '';
+          setTimeout(refresh, 8000);
+          mark({ view: 'main', sent: true });
+        } catch (e) { err.textContent = String(e); } finally { btn.disabled = false; }
+      });
+      slot.replaceChildren(h('section', { class: 'card' }, h('h2', {}, 'Отправить'), field('Монета', sel), field('Кому', to), field('Сколько', amount), field('Комментарий', comment), err, btn));
+    }
+
+    control.append(
+      h('button', { class: 'button', id: 'reveal', onclick: async () => {
+        const p = pw('reveal-pw'), e = h('p', { class: 'err' }); let layer;
+        layer = Kit.modal({ title: 'Секретная фраза', width: 480, body: [h('p', {}, 'Введите пароль, чтобы показать 24 слова. Убедитесь, что за экраном никто не смотрит.'), field('Пароль', p), e, h('ol', { class: 'words', id: 'revealed' })],
+          footer: [h('button', { class: 'button ghost', onclick: () => layer.close() }, 'Закрыть'), h('button', { class: 'button primary', 'data-autofocus': true, onclick: async () => { try { const w = await invoke('wallet_reveal', { password: p.value }); document.getElementById('revealed').replaceChildren(...w.map((x) => h('li', {}, x))); p.value = ''; e.textContent = ''; } catch (x) { e.textContent = String(x); } } }, 'Показать')] });
+      } }, 'Секретная фраза'),
+      h('button', { class: 'button', id: 'lock', onclick: async () => { await invoke('wallet_lock'); st.unlocked = false; fillSend(); } }, 'Заблокировать'),
+      h('button', { class: 'button', id: 'forget', onclick: async () => { const ok = await ask({ title: 'Удалить кошелёк с этого устройства?', text: 'Ключ будет стёрт. Если вы не записали 24 слова, деньги на этом адресе будут потеряны навсегда.', confirmLabel: 'Удалить', danger: true }); if (ok === true) { await invoke('wallet_forget'); load(); } } }, 'Удалить с устройства'));
+
+    function addToken() {
+      const sym = h('input', { class: 'in', id: 'tk-sym', placeholder: 'RIFT' }), name = h('input', { class: 'in', id: 'tk-name', placeholder: 'Название' }), dec = h('input', { class: 'in', id: 'tk-dec', value: '9', inputmode: 'numeric' }), master = h('input', { class: 'in', id: 'tk-master', placeholder: 'Адрес мастер-контракта jetton' }), e = h('p', { class: 'err' }); let layer;
+      layer = Kit.modal({ title: 'Добавить монету', width: 480, body: [h('p', {}, 'Монета (jetton) показывается в списке и доступна для отправки. Проверьте адрес мастер-контракта: подделки имитируют названия.'), field('Тикер', sym), field('Название', name), field('Знаков после запятой', dec), field('Адрес мастер-контракта', master), e],
+        footer: [h('button', { class: 'button ghost', onclick: () => layer.close() }, 'Отмена'), h('button', { class: 'button primary', id: 'tk-add', onclick: async () => { try { await invoke('wallet_add_token', { symbol: sym.value, name: name.value || sym.value, decimals: Number(dec.value), master: master.value }); layer.close(); refresh(); } catch (x) { e.textContent = String(x); } } }, 'Добавить')] });
+    }
+    fillSend();
+    refresh();
+  }
+
+  async function load() {
+    const st = await invoke('wallet_status');
+    document.getElementById('net').classList.toggle('hide', !st.exists);
+    if (!st.available) main.replaceChildren(h('p', { class: 'empty' }, 'Кошелёк недоступен: у приложения нет каталога данных.'));
+    else if (!st.exists) viewNone(); else await viewMain(st);
+  }
+  load();
+</script>
+</body>
+</html>

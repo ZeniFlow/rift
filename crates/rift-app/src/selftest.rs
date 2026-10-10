@@ -230,6 +230,63 @@ pub fn run() -> Result<()> {
 
 // ---------------------------------------------------------------- проверка через панель
 
+
+/// Поддельный API TON для проверки страницы кошелька: отвечает как toncenter, считает вызовы `sendBoc`.
+async fn mock_ton_api() -> Result<(String, std::sync::Arc<std::sync::atomic::AtomicUsize>)> {
+    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let l = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let (url, sent) = (format!("http://{}/api/v2", l.local_addr()?), Arc::new(AtomicUsize::new(0)));
+    let counter = sent.clone();
+    let jetton_wallet: serde_json::Value = serde_json::from_str(include_str!("../../rift-wallet/tests/fixtures/jetton_wallet_addr.json"))?;
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut s, _)) = l.accept().await else { return };
+            let (counter, jw) = (counter.clone(), jetton_wallet.clone());
+            tokio::spawn(async move {
+                let mut buf = vec![];
+                let mut tmp = [0u8; 8192];
+                loop {
+                    let n = s.read(&mut tmp).await.unwrap_or(0);
+                    if n == 0 {
+                        return;
+                    }
+                    buf.extend_from_slice(&tmp[..n]);
+                    if let Some(p) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&buf[..p]).to_lowercase();
+                        let len = head.lines().find_map(|l| l.strip_prefix("content-length: ")).and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(0);
+                        if buf.len() >= p + 4 + len {
+                            break;
+                        }
+                    }
+                }
+                let text = String::from_utf8_lossy(&buf).to_string();
+                let target = text.split_whitespace().nth(1).unwrap_or("").to_string();
+                let method = target.split('?').next().unwrap_or("").rsplit('/').next().unwrap_or("").to_string();
+                let body = text.split("\r\n\r\n").nth(1).unwrap_or("");
+                let result = match method.as_str() {
+                    "getAddressBalance" => serde_json::json!("5000000000"),
+                    "getAddressInformation" => serde_json::json!({ "state": "active", "balance": "5000000000" }),
+                    "getTransactions" => serde_json::json!([]),
+                    "sendBoc" => {
+                        counter.fetch_add(1, Ordering::SeqCst);
+                        serde_json::json!({ "hash": "test" })
+                    }
+                    "runGetMethod" => match serde_json::from_str::<serde_json::Value>(body).ok().and_then(|v| v["method"].as_str().map(String::from)).as_deref() {
+                        Some("seqno") => serde_json::json!({ "exit_code": 0, "stack": [["num", "0x3"]] }),
+                        Some("get_wallet_address") => jw["result"].clone(),
+                        _ => serde_json::json!({ "exit_code": 0, "stack": [["num", "0x2faf080"]] }),
+                    },
+                    _ => serde_json::Value::Null,
+                };
+                let resp = serde_json::json!({ "ok": !result.is_null(), "result": result }).to_string();
+                s.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{resp}", resp.len()).as_bytes()).await.ok();
+            });
+        }
+    });
+    Ok((url, sent))
+}
+
 type States = mpsc::UnboundedReceiver<serde_json::Value>;
 
 /// Ждёт событие слоя или страницы настроек (`overlay-state`, `page-state`).
@@ -403,6 +460,71 @@ async fn scenario(app: &tauri::AppHandle, states: &mut States, events: &mut Stat
     step("сброс настроек спрашивает подтверждение");
 
 
+
+
+    // 6д. Кошелёк: создание, слова, подтверждение перевода, блокировка. Сеть TON подменена поддельным API.
+    let (api_url, sent) = mock_ton_api().await?;
+    core.wallet.for_test(rift_wallet::vault::Kdf::FAST, Some(api_url));
+    let probe = |js: &str| format!("window.__TAURI__.event.emit('page-state', {{ page: 'wallet', probe: true, {js} }})");
+    let sent_now = || sent.load(std::sync::atomic::Ordering::SeqCst);
+    ui.eval(type_js("browser://wallet"))?;
+    wait_ev(events, "кошелька нет", |e| e["page"] == "wallet" && e["view"] == "none").await?;
+    page("document.querySelector('#main .segmented button[data-v=mainnet]').click()")?;
+    page("document.getElementById('p1').value = 'correct horse'; document.getElementById('p2').value = 'wrong horse'; document.getElementById('go').click()")?;
+    let e = { page(&probe("err: document.getElementById('err').textContent"))?; wait_ev(events, "ошибка паролей", |e| e["probe"] == true).await? };
+    anyhow::ensure!(e["err"].as_str().is_some_and(|t| t.contains("не совпадают")), "несовпавшие пароли приняты: {e}");
+    anyhow::ensure!(!std::path::Path::new(&core.settings_file().unwrap().with_file_name("wallet.json")).exists(), "кошелёк создан при разных паролях");
+    page("document.getElementById('p2').value = 'correct horse'; document.getElementById('go').click()")?;
+    let w = wait_ev(events, "показаны 24 слова", |e| e["page"] == "wallet" && e["view"] == "words").await?;
+    anyhow::ensure!(w["count"] == 24, "слов не 24: {w}");
+    anyhow::ensure!(core.wallet.is_unlocked(), "созданный кошелёк не разблокирован");
+    page(&probe("disabled: document.getElementById('cont').disabled"))?;
+    anyhow::ensure!(wait_ev(events, "кнопка «Продолжить»", |e| e["probe"] == true).await?["disabled"] == true, "продолжить можно без отметки «записал слова»");
+    page("const c = document.getElementById('saved'); c.checked = true; c.dispatchEvent(new Event('change')); document.getElementById('cont').click()")?;
+    let m = wait_ev(events, "кошелёк открыт", |e| e["page"] == "wallet" && e["view"] == "main" && e["tokens"].is_array()).await?;
+    anyhow::ensure!(m["tokens"] == serde_json::json!(["TON", "USDT"]), "монеты: {m}");
+    #[cfg(unix)]
+    anyhow::ensure!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(core.settings_file().unwrap().with_file_name("wallet.json"))?.permissions()) & 0o777 == 0o600, "файл кошелька открыт для чтения другим");
+    step("кошелёк: создание с проверкой пароля, 24 слова, монеты TON и USDT");
+
+    let to = "EQCDM_QGggZ3qMa_f3lRPk4_qLDnLTqdi6OkMAV2NB9r5TG3"; // любой верный адрес основной сети
+    page(&format!("document.getElementById('send-to').value = '{to}'; document.getElementById('send-amount').value = 'abc'; document.getElementById('send').click()"))?;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    page(&probe("err: document.getElementById('send-err').textContent"))?;
+    let e = wait_ev(events, "ошибка суммы", |e| e["probe"] == true).await?;
+    anyhow::ensure!(e["err"].as_str().is_some_and(|t| !t.is_empty()) && sent_now() == 0, "неверная сумма принята или отправлена: {e}");
+    page("document.getElementById('send-amount').value = '0.5'; document.getElementById('send').click()")?;
+    wait_ev(events, "окно подтверждения перевода", |e| e["layers"] == 1 && e["mode"] == "full" && e["what"] == "shown").await?;
+    overlay.eval("[...document.querySelectorAll('.dialog .button')].find((b) => !b.classList.contains('primary') && !b.classList.contains('danger')).click()")?;
+    wait_ev(events, "отмена перевода", |e| e["what"] == "layers" && e["layers"] == 0).await?;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    anyhow::ensure!(sent_now() == 0, "перевод ушёл без подтверждения");
+    page("document.getElementById('send').click()")?;
+    wait_ev(events, "окно подтверждения перевода (второй раз)", |e| e["layers"] == 1 && e["what"] == "shown").await?;
+    overlay.eval("document.querySelector('.dialog .button.primary').click()")?;
+    wait_ev(events, "перевод отправлен", |e| e["page"] == "wallet" && e["sent"] == true).await?;
+    anyhow::ensure!(sent_now() == 1, "ждали одну отправку, их {}", sent_now());
+    step("перевод: неверная сумма отвергается, без подтверждения не уходит, после подтверждения подписывается и отправляется");
+
+    page("document.getElementById('lock').click()")?;
+    for _ in 0..30 {
+        if !core.wallet.is_unlocked() { break; }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    anyhow::ensure!(!core.wallet.is_unlocked(), "кошелёк не заблокировался");
+    page(&probe("hasUnlock: !!document.getElementById('unlock'), hasSend: !!document.getElementById('send')"))?;
+    let e = wait_ev(events, "вид после блокировки", |e| e["probe"] == true).await?;
+    anyhow::ensure!(e["hasUnlock"] == true && e["hasSend"] == false, "после блокировки форма отправки доступна: {e}");
+    page("document.getElementById('unlock-pw').value = 'bad password'; document.getElementById('unlock').click()")?;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    anyhow::ensure!(!core.wallet.is_unlocked(), "кошелёк открылся по неверному паролю");
+    page("document.getElementById('unlock-pw').value = 'correct horse'; document.getElementById('unlock').click()")?;
+    for _ in 0..30 {
+        if core.wallet.is_unlocked() { break; }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    anyhow::ensure!(core.wallet.is_unlocked(), "кошелёк не открылся по верному паролю");
+    step("кошелёк: блокировка прячет отправку, неверный пароль не открывает, верный открывает");
 
     // 6б. Вкладки: новая вкладка не перекрывает слой и панель, у каждой свой адрес, история и закладки не путаются с адресами шлюза.
     anyhow::ensure!(core.tab_count() == 1, "ждали одну вкладку, их {}", core.tab_count());

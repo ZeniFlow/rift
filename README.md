@@ -5,12 +5,13 @@
 
 Лицензия — AGPL-3.0.
 
-## Статус: фаза 3 (идёт)
+## Статус: фаза 4 идёт, фаза 5 начата
 
 - Фаза 0: ключ ноды, соединение по NodeID через relay с переходом на прямое (hole punching), `riftd ping`. Проверено в e2e: ноды за разными NAT.
 - Фаза 1: mesh-VPN `riftd vpn`. Устройства за NAT видят друг друга по IPv6 `fd72:…`, ноды в LAN находят друг друга через mDNS. Проверено в e2e: ping6 и TCP через туннель.
 - Фаза 2 (начата): `--proxy` — трафик к relay через маскирующий транспорт, см. [docs/bridge.md](docs/bridge.md).
 - Фаза 3 (идёт): доверие и имена. `rift-trust` (цепочка root → control → зона → регистратор → домен, проверка оффлайн), `rift-ca` (оффлайн-выпуск), `riftd resolver / host / publish / get`, transparency-логи со свидетелями, HTTP-прокси и статика. Сайт открывается при выключенном control.
+- Фаза 4 (идёт): браузер `rift-app` (Tauri 2). Сайты `rift://` со своим origin, вкладки, история, закладки, подсказки в адресной строке, страница `browser://settings`, проверка подписей в значке сайта. Кошелёк `browser://wallet` (фаза 5, начата): ключи на устройстве, TON и jetton'ы, см. [docs/wallet.md](docs/wallet.md). Дальше: jetton RIFT и оплата зон, выходные ноды (фаза 6).
 
 ## Сборка
 
@@ -146,8 +147,12 @@ rift-ca notice --key root.key --unfreeze shop.brand -o unfreeze.json     # сн�
 
 ```bash
 cargo run -p rift-app -- demo          # окно с сайтом в сети Rift, поднятой в процессе (подробнее: docs/browser.md)
-cargo run -p rift-app -- selftest-ui   # автоматическая проверка окна: адрес, история, cookie, WebSocket, заморозка
+cargo run -p rift-app -- selftest-ui   # автоматическая проверка окна: вкладки, адрес, подсказки, история, закладки, настройки, cookie, WebSocket, заморозка
 ```
+
+В окне: вкладки (`Cmd/Ctrl+T`, `W`), звёздочка закладки (`D`), `browser://history`, `browser://bookmarks`, `browser://settings` (`Cmd/Ctrl+,`:
+акцент, размытие, анимации, история). Блокировка заморозки и цепочка подписей видны в значке слева от адреса. Размытие только на macOS.
+Данные: `~/.rift-app/` (`settings.json`, `history.json`, `bookmarks.json`). Подробности: [docs/browser.md](docs/browser.md).
 
 ### Открыть сайт в браузере (прокси)
 

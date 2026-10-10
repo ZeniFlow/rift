@@ -74,7 +74,7 @@ fn one() -> usize {
 /// Встроенные страницы: живут в приложении, в сеть за ними не ходим.
 const BUILTIN: [&str; 1] = ["start.rift"];
 /// Внутренние страницы `browser://…`: файлы приложения (`ui/<имя>.html`). Зона `browser` не принадлежит сети Rift.
-const INTERNAL: [&str; 4] = ["settings", "newtab", "history", "bookmarks"];
+const INTERNAL: [&str; 5] = ["settings", "newtab", "history", "bookmarks", "wallet"];
 
 /// Страница приложения (`tauri://localhost/…`, на Windows `http://tauri.localhost/…`) → её имя для `browser://`.
 fn internal_page(url: &Url) -> Option<&'static str> {
@@ -102,6 +102,7 @@ pub struct Core {
     overlay: Mutex<Option<OverlayMode>>,
     tabs: Mutex<Tabs>,
     store: Mutex<Store>,
+    pub wallet: crate::wallet::WalletState,
 }
 
 /// Где стоит слой: на всё окно, плашка справа под панелью (уведомления) или плашка в заданном месте (подсказки адреса).
@@ -210,7 +211,7 @@ impl Core {
             }),
             None => Settings::default(),
         };
-        Ok(Self { client, gateway, port, settings: Mutex::new(settings), settings_path, asks: Mutex::default(), overlay: Mutex::new(None), tabs: Mutex::default(), store: Mutex::new(Store::load(dir)) })
+        Ok(Self { client, gateway, port, settings: Mutex::new(settings), settings_path, asks: Mutex::default(), overlay: Mutex::new(None), tabs: Mutex::default(), store: Mutex::new(Store::load(dir)), wallet: crate::wallet::WalletState::new(dir) })
     }
 
     pub fn active_label(&self) -> Option<String> {
@@ -876,6 +877,9 @@ pub fn launch(core: Arc<Core>, start: Option<String>, setup: impl FnOnce(&AppHan
         })
         .invoke_handler(tauri::generate_handler![
             navigate, history, reload, tab_new, tab_switch, tab_close, tabs_state, history_list, history_forget, history_clear, top_sites, suggest,
+            crate::wallet::wallet_status, crate::wallet::wallet_create, crate::wallet::wallet_import, crate::wallet::wallet_unlock, crate::wallet::wallet_lock,
+            crate::wallet::wallet_reveal, crate::wallet::wallet_balances, crate::wallet::wallet_history, crate::wallet::wallet_check_send, crate::wallet::wallet_send,
+            crate::wallet::wallet_add_token, crate::wallet::wallet_forget,
             bookmarks_list, bookmark_state, bookmark_toggle, bookmark_remove, get_settings, set_settings, reset_settings, get_caps, get_info, sync_notices,
             overlay_open, overlay_ask, overlay_result, overlay_mode, overlay_hide, overlay_blur
         ])

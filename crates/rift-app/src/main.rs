@@ -10,6 +10,7 @@ mod native;
 mod selftest;
 mod settings;
 mod store;
+mod wallet;
 
 /// `generate_context!` можно вызвать в бинарнике только один раз.
 pub fn context() -> tauri::Context {

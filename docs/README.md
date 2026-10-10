@@ -5,6 +5,7 @@
 
 | Документ | О чём |
 |---|---|
+| [wallet.md](wallet.md) | Кошелёк TON: ключи, перевод TON и jetton, что проверено |
 | [architecture.md](architecture.md) | Слои, роли нод, транспорт, NAT, маскировка, VPN, хостинг, кошелёк, сборка, фазы |
 | [bridge.md](bridge.md) | Мост: как замаскировать трафик к relay под TLS к чужому сайту (REALITY) |
 | [browser.md](browser.md) | Браузер: окно Tauri, шлюз `*.localhost`, защита, что проверено в WebView |
