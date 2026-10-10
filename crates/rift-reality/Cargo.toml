@@ -1,0 +1,25 @@
+[package]
+name = "rift-reality"
+description = "REALITY (TLS camouflage) client/server, vendored from shoes (MIT)"
+version.workspace = true
+edition.workspace = true
+license = "AGPL-3.0-only AND MIT"
+repository.workspace = true
+
+[dependencies]
+aws-lc-rs = { version = "1.18", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"] }
+base64 = "0.23"
+bytes = "1"
+futures = "0.3"
+log = "0.4"
+rand = "0.10"
+rustls = { version = "0.23", default-features = false, features = ["std"] }
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
+subtle = "2.6"
+tokio = { workspace = true }
+x509-parser = { version = "0.18", default-features = false, features = ["verify-aws"] }
+
+[dev-dependencies]
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "pem"] }
+tokio = { workspace = true, features = ["test-util", "full"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs"] }

@@ -274,6 +274,7 @@ mod tests {
             relay_mode: RelayMode::Disabled,
             lan: false,
             proxy: None,
+            bridge: None,
             relay_ca: None,
             vpn: Some(vpn.clone()),
         })

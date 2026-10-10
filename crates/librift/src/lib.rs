@@ -47,6 +47,7 @@ pub fn load_or_create_key(path: &Path) -> Result<SecretKey> {
     }
 }
 
+pub mod bridge;
 pub mod vpn;
 
 /// Настройки ноды.
@@ -59,6 +60,8 @@ pub struct Config {
     /// HTTP CONNECT-прокси для трафика к relay: сюда подключается маскирующий транспорт
     /// (Xray / sing-box / shoes с REALITY и т.п.). Прямые UDP-пути через прокси не идут.
     pub proxy: Option<url::Url>,
+    /// Мост REALITY: трафик к relay идёт через него (поверх `proxy` не комбинируется).
+    pub bridge: Option<bridge::BridgeUrl>,
     /// PEM с корневыми сертификатами relay. Если задан, доверяем ТОЛЬКО им
     /// (свои relay без публичных CA и без засветки доменов в CT-логах).
     pub relay_ca: Option<std::path::PathBuf>,
@@ -85,7 +88,12 @@ impl Node {
         let mut builder = Endpoint::builder(presets::Minimal)
             .secret_key(cfg.key)
             .relay_mode(cfg.relay_mode);
-        if let Some(proxy) = cfg.proxy {
+        let proxy = match (cfg.proxy, cfg.bridge) {
+            (Some(_), Some(_)) => anyhow::bail!("--proxy и --bridge вместе не работают"),
+            (proxy, None) => proxy,
+            (None, Some(b)) => Some(bridge::spawn_client_proxy(b).await?),
+        };
+        if let Some(proxy) = proxy {
             builder = builder.proxy_url(proxy);
         }
         if let Some(path) = &cfg.relay_ca {
@@ -203,7 +211,7 @@ mod tests {
 
     #[tokio::test]
     async fn ping_over_localhost() -> Result<()> {
-        let cfg = || Config { key: SecretKey::generate(), relay_mode: RelayMode::Disabled, lan: false, proxy: None, relay_ca: None, vpn: None };
+        let cfg = || Config { key: SecretKey::generate(), relay_mode: RelayMode::Disabled, lan: false, proxy: None, bridge: None, relay_ca: None, vpn: None };
         let a = Node::bind(cfg()).await?;
         let b = Node::bind(cfg()).await?;
         let mut p = a.pinger(b.endpoint().addr()).await?;
@@ -271,6 +279,7 @@ mod tests {
             relay_mode: RelayMode::Custom(relay_map),
             lan: false,
             proxy: Some(proxy),
+            bridge: None,
             relay_ca: None,
             vpn: None,
         })
