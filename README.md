@@ -61,6 +61,7 @@ sudo riftd --home ~/.rift --relay http://RELAY:3340 vpn --peer <NodeID друг�
 cargo test                  # юнит-тесты
 tests/e2e/run.sh flat       # e2e в Docker: две ноды в разных сетях, VPN через relay
 tests/e2e/run.sh nat        # e2e: ноды за NAT-роутерами, проверка пробития NAT
+tests/e2e/run.sh names      # e2e: имена + сетевые логи + свидетели + хост (прокси, заголовки, статика) + takedown
 ```
 
 ## Имена и сайты (фаза 3)
@@ -124,14 +125,20 @@ riftd --key app.key --relay $RELAY log-proof --log $ZON --index 0 -o domain-proo
 ```bash
 T="--root $ROOT --witness $W1 --witness $W2 --threshold 2"
 riftd --relay $RELAY resolver $T                                        # печатает NodeID@relay
+riftd --relay $RELAY resolver $T --peer $RESOLVER_1 --sync-secs 60      # второй резолвер: берёт объявления у соседа
 riftd --relay $RELAY host $T --bundle bundle.json --upstream http://127.0.0.1:3000 --resolver $RESOLVER   # Node.js, nginx…
 riftd --relay $RELAY host $T --bundle bundle.json --static ./dist --resolver $RESOLVER                      # собранный React/Vue (SPA)
 riftd --relay $RELAY get rift://shop.brand/ $T --resolver $RESOLVER
 rift-ca notice --key root.key --freeze shop.brand -o freeze.json        # takedown (control: + --control-cert control.json)
 riftd --relay $RELAY publish --resolver $RESOLVER --notice freeze.json
+riftd --relay $RELAY notices $T --resolver $RESOLVER                    # клиент подтягивает заморозки/отзывы в <home>/notices.json
 ```
 
 Приложение видит заголовок `Rift-Client-Id` с проверенным NodeID клиента (это готовая авторизация без паролей),
 `Host` = адрес upstream, исходное имя — в `X-Forwarded-Host`. WebSocket и SSE работают.
+
+Заморозку достаточно опубликовать **одному** резолверу: соседи (`--peer`) подтягивают объявления сами. Клиент
+сохраняет увиденные объявления в `<home>/notices.json`: раз увидев заморозку, он не откроет домен, даже если
+отставший или злонамеренный резолвер её промолчит.
 
 `--threshold 0` отключает проверку свидетелей (только для отладки: защиты от выпуска задним числом нет).

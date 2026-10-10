@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [flat, nat]
+        scenario: [flat, nat, names]
     steps:
       - uses: actions/checkout@v4
       - run: tests/e2e/run.sh ${{ matrix.scenario }}
@@ -32,3 +32,4 @@ jobs:
         with:
           name: e2e-${{ matrix.scenario }}-log
           path: tests/e2e/e2e-${{ matrix.scenario }}.log
+          if-no-files-found: ignore

@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use librift::bridge::BridgeUrl;
 use librift::host::{HTTP_ALPN, Host};
 use librift::logsvc::{self, LOG_ALPN, LogService, WITNESS_ALPN, WitnessService};
-use librift::names::{self, NAMES_ALPN, Request, Resolver};
+use librift::names::{self, NAMES_ALPN, NoticeCache, Request, Resolver};
 use librift::{Config, EndpointAddr, Handler, Node, NodeId, RelayUrl, SecretKey, TransportAddr, Url, load_or_create_key, vpn};
 use rift_trust::{Announcement, Bundle, PublicKey, Trust};
 
@@ -102,6 +102,19 @@ enum Cmd {
     Resolver {
         #[command(flatten)]
         trust: TrustArgs,
+        /// Соседние резолверы (NodeID или NodeID@relay): объявления (заморозки, отзывы) подтягиваем у них.
+        #[arg(long = "peer", env = "RIFT_PEERS_RESOLVERS", value_delimiter = ',')]
+        peers: Vec<String>,
+        /// Как часто спрашивать соседей, секунд.
+        #[arg(long, default_value_t = 60)]
+        sync_secs: u64,
+    },
+    /// Подтянуть объявления (заморозки, отзывы) в локальный кэш клиента `<home>/notices.json`.
+    Notices {
+        #[command(flatten)]
+        trust: TrustArgs,
+        #[arg(long = "resolver", env = "RIFT_RESOLVERS", value_delimiter = ',', required = true)]
+        resolvers: Vec<String>,
     },
     /// Сетевой лог: ключ ноды (`--key`) = ключ лога. Сам подписывает головы и собирает подписи свидетелей.
     Log {
@@ -228,10 +241,14 @@ async fn main() -> Result<()> {
         Cmd::Witness { state, logs } => Some(WitnessService::new(key.clone(), Some(state.clone().unwrap_or_else(|| home.join("witness.json"))), logs.clone())?),
         _ => None,
     };
+    let resolver_svc = match &cli.cmd {
+        Cmd::Resolver { trust, .. } => Some(Resolver::new(trust.get()?)),
+        _ => None,
+    };
     let extra: Vec<(Vec<u8>, Handler)> = match &cli.cmd {
         Cmd::Log { .. } => vec![(LOG_ALPN.to_vec(), Box::new(log_svc.clone().unwrap()))],
         Cmd::Witness { .. } => vec![(WITNESS_ALPN.to_vec(), Box::new(witness_svc.clone().unwrap()))],
-        Cmd::Resolver { trust } => vec![(NAMES_ALPN.to_vec(), Box::new(Resolver::new(trust.get()?)))],
+        Cmd::Resolver { .. } => vec![(NAMES_ALPN.to_vec(), Box::new(resolver_svc.clone().unwrap()))],
         Cmd::Host { upstream: Some(u), upstream_insecure, .. } => vec![(HTTP_ALPN.to_vec(), Box::new(Host::proxy(u, *upstream_insecure)?))],
         Cmd::Host { static_dir: Some(d), .. } => vec![(HTTP_ALPN.to_vec(), Box::new(Host::static_dir(d)?))],
         _ => vec![],
@@ -291,10 +308,25 @@ async fn main() -> Result<()> {
             )?;
             println!("{}  (голова размера {}, подписей: {})", out.display(), proof.head.body.size, proof.cosigs.len());
         }
-        Cmd::Resolver { .. } => {
+        Cmd::Notices { trust, resolvers } => {
+            let trust = trust.get()?;
+            let resolvers = parse_peers(&resolvers, &default_relay)?;
+            let mut cache = NoticeCache::load(home.join("notices.json"), &trust.root)?;
+            let added = names::sync_notices(node.endpoint(), &resolvers, &trust.root, &mut cache).await;
+            println!("новых: {added}, всего в кэше: {}", cache.all().len());
+            for n in cache.all() {
+                println!("  {:?}", n.notice.body);
+            }
+        }
+        Cmd::Resolver { peers, sync_secs, .. } => {
             node.endpoint().online().await;
             let relay = node.endpoint().addr().relay_urls().next().map(|r| format!("@{r}")).unwrap_or_default();
-            println!("Резолвер: {}{relay}\n\nCtrl-C — выход.", node.id());
+            println!("Резолвер: {}{relay}\nсоседей: {}\n\nCtrl-C — выход.", node.id(), peers.len());
+            if !peers.is_empty() {
+                let peers = parse_peers(&peers, &default_relay)?;
+                let (svc, ep) = (resolver_svc.unwrap(), node.endpoint().clone());
+                tokio::spawn(async move { svc.run_sync(ep, peers, Duration::from_secs(sync_secs.max(1))).await });
+            }
             tokio::signal::ctrl_c().await?;
         }
         Cmd::Host { trust, bundle, resolvers, upstream, static_dir, .. } => {
@@ -336,7 +368,8 @@ async fn main() -> Result<()> {
             let rest = url.strip_prefix("rift://").context("ожидался rift://имя.зона/путь")?;
             let (name, path) = rest.split_once('/').map_or((rest, "/".to_string()), |(n, p)| (n, format!("/{p}")));
             let resolvers = parse_peers(&resolvers, &default_relay)?;
-            let r = names::resolve(node.endpoint(), &resolvers, &trust, name).await?;
+            let mut cache = NoticeCache::load(home.join("notices.json"), &trust.root)?;
+            let r = names::resolve(node.endpoint(), &resolvers, &trust, name, &mut cache).await?;
             let request = librift::host::get_request(name, &path);
             let mut last = None;
             for h in &r.hosts {

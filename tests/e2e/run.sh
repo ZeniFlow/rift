@@ -5,6 +5,11 @@
 set -eu
 cd "$(dirname "$0")"
 SCENARIO=${1:-flat}
+if [ "$SCENARIO" = names ]; then
+  # Всё в одном контейнере: сеть контейнеров тут не нужна, проверяется протокол.
+  docker build -q -t rift-e2e -f Dockerfile ../.. >/dev/null
+  exec docker run --rm rift-e2e bash /e2e/names.sh
+fi
 FILE=compose.yaml; [ "$SCENARIO" = nat ] && FILE=compose.nat.yaml
 dc() { docker compose -p "rift-e2e-$SCENARIO" -f "$FILE" "$@"; }
 trap 'dc logs --no-color > "e2e-$SCENARIO.log" 2>&1; dc down -v >/dev/null 2>&1' EXIT

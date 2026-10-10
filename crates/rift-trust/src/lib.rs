@@ -105,6 +105,23 @@ impl Announcement {
     }
 }
 
+impl Announcement {
+    /// Относится ли объявление к этой цепочке. Резолвер отдаёт клиенту только такие: компактно и без утечки чужого.
+    pub fn concerns(&self, b: &Bundle, root: &PublicKey) -> bool {
+        match &self.notice.body {
+            Notice::Freeze { name, .. } => *name == b.domain.cert.body.name,
+            Notice::RevokeZone { zone, .. } => *zone == b.zone.cert.body.zone,
+            Notice::RevokeKey { key, .. } => {
+                key == root
+                    || *key == b.control.body.key
+                    || *key == b.zone.cert.body.owner
+                    || *key == b.domain.cert.body.owner
+                    || b.registrar.as_ref().is_some_and(|r| r.cert.body.registrar == *key)
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------- подписи
 
 pub trait Kind {
